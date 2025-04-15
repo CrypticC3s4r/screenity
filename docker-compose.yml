@@ -1,0 +1,62 @@
+version: '3'
+
+services:
+  # Build the extension
+  build:
+    build: .
+    mem_limit: 4g
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    ports:
+      - "8000:8000"  # Port for development server
+    environment:
+      - NPM_CONFIG_LOGLEVEL=verbose
+      - NODE_OPTIONS=--max-old-space-size=4096
+    command: >
+      sh -c "
+        mkdir -p /app/npm_error_logs &&
+        export NODE_OPTIONS=--max-old-space-size=4096 &&
+        (npm run build > /app/npm_error_logs/build_output.log 2>&1 && 
+         echo '✅ Build completed at: ' && date) ||
+        (echo '❌ Build failed - log saved to npm_error_logs/build_output.log and npm_error_logs/latest.log' &&
+         find /root/.npm/_logs -type f -name '*.log' -exec cat {} \\; > /app/npm_error_logs/latest.log &&
+         cp -r /root/.npm/_logs/* /app/npm_error_logs/ &&
+         exit 1)
+      "
+
+  # Run the development server
+  dev:
+    build: .
+    mem_limit: 4g
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    ports:
+      - "8000:8000"  # Port for development server
+    environment:
+      - NPM_CONFIG_LOGLEVEL=verbose
+      - NODE_OPTIONS=--max-old-space-size=4096
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    command: npm start
+    
+  # Create a service to help with testing
+  test:
+    build: .
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    environment:
+      - NPM_CONFIG_LOGLEVEL=verbose
+      - NODE_OPTIONS=--max-old-space-size=4096
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+    command: npm test
+
+volumes:
+  npm_logs:  # Define the volume for npm logs

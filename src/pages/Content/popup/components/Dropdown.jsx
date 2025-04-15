@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useContext, useRef } from "react";
+import React, { useEffect, useState, useContext, useRef, useCallback } from "react";
 
 import * as Select from "@radix-ui/react-select";
 import {
@@ -17,6 +17,8 @@ const Dropdown = (props) => {
   const [contentState, setContentState] = useContext(contentStateContext);
   const [label, setLabel] = useState(chrome.i18n.getMessage("None"));
   const [open, setOpen] = useState(false);
+  const [deviceList, setDeviceList] = useState([]);
+  const previousDeviceRef = useRef(null);
 
   const updateItems = () => {
     if (props.type === "camera") {
@@ -66,6 +68,97 @@ const Dropdown = (props) => {
     }
   };
 
+  const handleDeviceError = useCallback((deviceType, error) => {
+    console.error(`Error accessing ${deviceType} device:`, error);
+
+    if (deviceType === "camera") {
+      setContentState((prevState) => ({
+        ...prevState,
+        cameraActive: false,
+        defaultVideoInput: "none",
+      }));
+      chrome.storage.local.set({
+        cameraActive: false,
+        defaultVideoInput: "none",
+      });
+      setLabel(chrome.i18n.getMessage("noCameraDropdownLabel"));
+    } else {
+      setContentState((prevState) => ({
+        ...prevState,
+        micActive: false,
+        defaultAudioInput: "none",
+      }));
+      chrome.storage.local.set({
+        micActive: false,
+        defaultAudioInput: "none",
+      });
+      setLabel(chrome.i18n.getMessage("noMicrophoneDropdownLabel"));
+    }
+  }, [setContentState]);
+
+  const refreshDeviceList = useCallback(async () => {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const filteredDevices = devices
+        .filter((device) => device.kind === (props.type === "camera" ? "videoinput" : "audioinput"))
+        .map((device) => ({
+          deviceId: device.deviceId,
+          label: device.label || `Device ${device.deviceId.substr(0, 5)}...`,
+        }));
+
+      console.log("Devices fetched:", filteredDevices); // Debug log
+
+      setDeviceList(filteredDevices);
+
+      if (props.type === "camera") {
+        setContentState((prevState) => {
+          const updatedState = { ...prevState, videoInput: filteredDevices };
+          console.log("Updated contentState (camera):", updatedState); // Debug log
+          return updatedState;
+        });
+      } else {
+        setContentState((prevState) => {
+          const updatedState = { ...prevState, audioInput: filteredDevices };
+          console.log("Updated contentState (mic):", updatedState); // Debug log
+          return updatedState;
+        });
+      }
+    } catch (error) {
+      handleDeviceError(props.type, error);
+    }
+  }, [props.type, setContentState, handleDeviceError]);
+
+  useEffect(() => {
+    const handleDeviceChange = () => {
+      refreshDeviceList();
+    };
+
+    navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+    refreshDeviceList();
+
+    return () => {
+      navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+    };
+  }, [refreshDeviceList]);
+
+  useEffect(() => {
+    if (props.type === "camera" && contentState.defaultVideoInput !== "none") {
+      previousDeviceRef.current = contentState.defaultVideoInput;
+    } else if (props.type === "mic" && contentState.defaultAudioInput !== "none") {
+      previousDeviceRef.current = contentState.defaultAudioInput;
+    }
+  }, [props.type, contentState.defaultAudioInput, contentState.defaultVideoInput]);
+
+  useEffect(() => {
+    if (open) {
+      refreshDeviceList();
+    }
+  }, [open, refreshDeviceList]);
+
+  useEffect(() => {
+    refreshDeviceList();
+  }, [refreshDeviceList]);
+
   useEffect(() => {
     updateItems();
   }, [
@@ -80,6 +173,106 @@ const Dropdown = (props) => {
   useEffect(() => {
     updateItems();
   }, []);
+
+  useEffect(() => {
+    const checkPermissions = async () => {
+      try {
+        const cameraPermission = await navigator.permissions.query({ name: "camera" });
+        const micPermission = await navigator.permissions.query({ name: "microphone" });
+        console.log("Camera permissions:", cameraPermission.state); // Debug log
+        console.log("Microphone permissions:", micPermission.state); // Debug log
+
+        if (cameraPermission.state === "prompt" || micPermission.state === "prompt") {
+          console.log("Triggering permission prompt...");
+          navigator.mediaDevices.getUserMedia({ audio: true, video: true })
+            .then((stream) => {
+              console.log("Permissions granted");
+              stream.getTracks().forEach((track) => track.stop());
+              refreshDeviceList(); // Refresh device list after permissions are granted
+            })
+            .catch((error) => {
+              console.error("Permission denied:", error);
+            });
+        }
+      } catch (error) {
+        console.error("Error checking permissions:", error);
+      }
+    };
+
+    checkPermissions();
+    console.log("Dropdown opened, refreshing device list"); // Debug log
+    refreshDeviceList();
+  }, [refreshDeviceList]);
+
+  const onValueChange = (newValue) => {
+    if (props.type === "camera") {
+      if (newValue === "none") {
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          cameraActive: false,
+        }));
+        chrome.storage.local.set({
+          cameraActive: false,
+        });
+        setLabel(chrome.i18n.getMessage("noCameraDropdownLabel"));
+      } else {
+        const selectedDevice = contentState.videoInput.find(
+          (device) => device.deviceId === newValue
+        );
+        
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          defaultVideoInput: newValue,
+          cameraActive: true,
+        }));
+        chrome.storage.local.set({
+          defaultVideoInput: newValue,
+          cameraActive: true,
+        });
+        chrome.runtime.sendMessage({
+          type: "switch-camera",
+          id: newValue,
+          label: selectedDevice?.label  // Send the camera label for cross-tab identification
+        });
+        setLabel(selectedDevice?.label || "Camera");
+      }
+    } else {
+      if (newValue === "none") {
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          micActive: false,
+        }));
+        chrome.storage.local.set({
+          micActive: false,
+        });
+        setLabel(chrome.i18n.getMessage("noMicrophoneDropdownLabel"));
+      } else {
+        previousDeviceRef.current = newValue;
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          defaultAudioInput: newValue,
+          micActive: true,
+        }));
+        chrome.storage.local.set({
+          defaultAudioInput: newValue,
+          micActive: true,
+          userSelectedAudioDevice: true  // Mark this as a user selection
+        });
+        setLabel(
+          contentState.audioInput.find(
+            (device) => device.deviceId === newValue
+          ).label
+        );
+        
+        // Notify waveform about device change using Chrome messaging
+        chrome.runtime.sendMessage({
+          type: 'microphone-changed',
+          deviceId: newValue,
+          timestamp: Date.now() // Add timestamp to ensure the message is treated as new
+        });
+      }
+    }
+  };
 
   const toggleActive = (e) => {
     e.preventDefault();
@@ -96,18 +289,37 @@ const Dropdown = (props) => {
         });
         setLabel(chrome.i18n.getMessage("noCameraDropdownLabel"));
       } else {
-        setContentState((prevContentState) => ({
-          ...prevContentState,
-          cameraActive: true,
-        }));
-        chrome.storage.local.set({
-          cameraActive: true,
+        refreshDeviceList().then(() => {
+          if (contentState.videoInput.length > 0) {
+            const deviceToUse = previousDeviceRef.current &&
+              contentState.videoInput.some(d => d.deviceId === previousDeviceRef.current)
+              ? previousDeviceRef.current
+              : contentState.videoInput[0]?.deviceId;
+            
+            const selectedDevice = contentState.videoInput.find(
+              device => device.deviceId === deviceToUse
+            );
+
+            setContentState(prevState => ({
+              ...prevState,
+              cameraActive: true,
+              defaultVideoInput: deviceToUse
+            }));
+            chrome.storage.local.set({
+              cameraActive: true,
+              defaultVideoInput: deviceToUse
+            });
+            
+            // Send the device label for cross-tab identification
+            chrome.runtime.sendMessage({
+              type: "switch-camera",
+              id: deviceToUse,
+              label: selectedDevice?.label
+            });
+            
+            setLabel(selectedDevice?.label || "Camera");
+          }
         });
-        setLabel(
-          contentState.videoInput.find(
-            (device) => device.deviceId === contentState.defaultVideoInput
-          ).label
-        );
       }
     } else {
       if (contentState.micActive) {
@@ -120,21 +332,61 @@ const Dropdown = (props) => {
         });
         setLabel(chrome.i18n.getMessage("noMicrophoneDropdownLabel"));
       } else {
-        setContentState((prevContentState) => ({
-          ...prevContentState,
-          micActive: true,
-        }));
-        chrome.storage.local.set({
-          micActive: true,
+        refreshDeviceList().then(() => {
+          if (contentState.audioInput.length > 0) {
+            const deviceToUse = previousDeviceRef.current &&
+              contentState.audioInput.some(d => d.deviceId === previousDeviceRef.current)
+              ? previousDeviceRef.current
+              : contentState.audioInput[0].deviceId;
+
+            setContentState(prevState => ({
+              ...prevState,
+              micActive: true,
+              defaultAudioInput: deviceToUse
+            }));
+            chrome.storage.local.set({
+              micActive: true,
+              defaultAudioInput: deviceToUse,
+              userSelectedAudioDevice: true
+            });
+            setLabel(contentState.audioInput.find(d => d.deviceId === deviceToUse)?.label || "Microphone");
+            chrome.runtime.sendMessage({
+              type: 'microphone-changed',
+              deviceId: deviceToUse,
+              timestamp: Date.now()
+            });
+          }
         });
-        setLabel(
-          contentState.audioInput.find(
-            (device) => device.deviceId === contentState.defaultAudioInput
-          ).label
-        );
       }
     }
   };
+
+  useEffect(() => {
+    const handleMessage = (request, sender, sendResponse) => {
+      if (request.type === "camera-selection-changed" && props.type === "camera") {
+        refreshDeviceList().then(() => {
+          // Find device by label
+          const matchedDevice = contentState.videoInput.find(
+            device => device.label === request.cameraLabel
+          );
+          
+          if (matchedDevice) {
+            setContentState(prevState => ({
+              ...prevState,
+              cameraActive: true,
+              defaultVideoInput: matchedDevice.deviceId
+            }));
+            setLabel(matchedDevice.label);
+          }
+        });
+      }
+    };
+    
+    chrome.runtime.onMessage.addListener(handleMessage);
+    return () => {
+      chrome.runtime.onMessage.removeListener(handleMessage);
+    };
+  }, [contentState.videoInput, refreshDeviceList]);
 
   const clickedIcon = useRef(false);
 
@@ -157,65 +409,7 @@ const Dropdown = (props) => {
           ? "none"
           : "none"
       }
-      onValueChange={(newValue) => {
-        if (props.type === "camera") {
-          if (newValue === "none") {
-            setContentState((prevContentState) => ({
-              ...prevContentState,
-              cameraActive: false,
-            }));
-            chrome.storage.local.set({
-              cameraActive: false,
-            });
-            setLabel(chrome.i18n.getMessage("noCameraDropdownLabel"));
-          } else {
-            setContentState((prevContentState) => ({
-              ...prevContentState,
-              defaultVideoInput: newValue,
-              cameraActive: true,
-            }));
-            chrome.storage.local.set({
-              defaultVideoInput: newValue,
-              cameraActive: true,
-            });
-            chrome.runtime.sendMessage({
-              type: "switch-camera",
-              id: newValue,
-            });
-            setLabel(
-              contentState.videoInput.find(
-                (device) => device.deviceId === newValue
-              ).label
-            );
-          }
-        } else {
-          if (newValue === "none") {
-            setContentState((prevContentState) => ({
-              ...prevContentState,
-              micActive: false,
-            }));
-            chrome.storage.local.set({
-              micActive: false,
-            });
-            setLabel(chrome.i18n.getMessage("noMicrophoneDropdownLabel"));
-          } else {
-            setContentState((prevContentState) => ({
-              ...prevContentState,
-              defaultAudioInput: newValue,
-              micActive: true,
-            }));
-            chrome.storage.local.set({
-              defaultAudioInput: newValue,
-              micActive: true,
-            });
-            setLabel(
-              contentState.audioInput.find(
-                (device) => device.deviceId === newValue
-              ).label
-            );
-          }
-        }
-      }}
+      onValueChange={onValueChange}
     >
       <Select.Trigger className="SelectTrigger" aria-label="Food">
         <Select.Icon
@@ -308,9 +502,9 @@ const Dropdown = (props) => {
         </Select.Icon>
       </Select.Trigger>
       <Select.Portal
-        container={props.shadowRef.current.shadowRoot.querySelector(
-          ".container"
-        )}
+        container={
+          props.shadowRef?.current?.shadowRoot?.querySelector(".container") || document.body
+        }
       >
         <Select.Content position="popper" className="SelectContent">
           <Select.ScrollUpButton className="SelectScrollButton"></Select.ScrollUpButton>

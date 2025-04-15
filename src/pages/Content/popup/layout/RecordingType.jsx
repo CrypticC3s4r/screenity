@@ -242,6 +242,8 @@ const RecordingType = (props) => {
               height: "30px",
               zIndex: 9999999999,
               position: "relative",
+              border: "none",  // Remove any iframe border
+              overflow: "hidden" // Prevent scrollbars
             }}
             allow="camera; microphone"
             src={chrome.runtime.getURL("waveform.html")}

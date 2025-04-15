@@ -422,20 +422,20 @@ const ContentState = (props) => {
   }, [contentState, contentStateRef]);
 
   const tryRestartRecording = useCallback(() => {
-    contentState.pauseRecording();
-    contentState.openModal(
+    contentStateRef.current.pauseRecording();
+    contentStateRef.current.openModal(
       chrome.i18n.getMessage("restartModalTitle"),
       chrome.i18n.getMessage("restartModalDescription"),
       chrome.i18n.getMessage("restartModalRestart"),
       chrome.i18n.getMessage("restartModalResume"),
       () => {
-        contentState.restartRecording();
+        contentStateRef.current.restartRecording();
       },
       () => {
-        contentState.resumeRecording();
+        contentStateRef.current.resumeRecording();
       }
     );
-  });
+  }, [contentStateRef.current]);
 
   const tryDismissRecording = useCallback(() => {
     if (contentStateRef.current.askDismiss) {
@@ -470,6 +470,42 @@ const ContentState = (props) => {
     }
   }, [contentState, contentStateRef.current]);
 
+  const checkDeviceAvailability = useCallback(async (deviceType, deviceId) => {
+    try {
+      let constraints = {};
+      if (deviceType === 'audio') {
+        constraints = {
+          audio: {deviceId: deviceId ? {exact: deviceId} : undefined}
+        };
+      } else if (deviceType === 'video') {
+        constraints = {
+          video: {deviceId: deviceId ? {exact: deviceId} : undefined}
+        };
+      }
+      
+      // Attempt to get a media stream with the device
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      // If successful, stop tracks and return true
+      stream.getTracks().forEach(track => track.stop());
+      return true;
+    } catch (err) {
+      console.error(`Error accessing ${deviceType} device:`, err);
+      
+      // Show notification to user
+      if (contentStateRef.current && contentStateRef.current.openToast) {
+        contentStateRef.current.openToast(
+          chrome.i18n.getMessage(deviceType === 'audio' ? 
+            "microphoneUnavailableToast" : 
+            "cameraUnavailableToast") || 
+            `${deviceType === 'audio' ? 'Microphone' : 'Camera'} is unavailable or permission denied`,
+          function() {}
+        );
+      }
+      return false;
+    }
+  }, []);
+
   const handleDevicePermissions = (data) => {
     if (data && data != undefined && data.success) {
       // I need to convert to a regular array of objects
@@ -496,25 +532,31 @@ const ContentState = (props) => {
         // Set default devices
         // Check if audio devices exist
         if (audioInput.length > 0) {
-          setContentState((prevContentState) => ({
-            ...prevContentState,
-            defaultAudioInput: audioInput[0].deviceId,
-            micActive: true,
-          }));
-          chrome.storage.local.set({
-            defaultAudioInput: audioInput[0].deviceId,
-            micActive: true,
+          // Verify mic availability before setting active
+          checkDeviceAvailability('audio', audioInput[0].deviceId).then(available => {
+            setContentState((prevContentState) => ({
+              ...prevContentState,
+              defaultAudioInput: audioInput[0].deviceId,
+              micActive: available,
+            }));
+            chrome.storage.local.set({
+              defaultAudioInput: audioInput[0].deviceId,
+              micActive: available,
+            });
           });
         }
         if (videoInput.length > 0) {
-          setContentState((prevContentState) => ({
-            ...prevContentState,
-            defaultVideoInput: videoInput[0].deviceId,
-            cameraActive: true,
-          }));
-          chrome.storage.local.set({
-            defaultVideoInput: videoInput[0].deviceId,
-            cameraActive: true,
+          // Verify camera availability before setting active
+          checkDeviceAvailability('video', videoInput[0].deviceId).then(available => {
+            setContentState((prevContentState) => ({
+              ...prevContentState,
+              defaultVideoInput: videoInput[0].deviceId,
+              cameraActive: available,
+            }));
+            chrome.storage.local.set({
+              defaultVideoInput: videoInput[0].deviceId,
+              cameraActive: available,
+            });
           });
         }
         if (audioInput.length > 0 || videoInput.length > 0) {
@@ -579,6 +621,234 @@ const ContentState = (props) => {
       window.removeEventListener("message", handleMessage);
     };
   }, []);
+
+  useEffect(() => {
+    // Listen for device changes
+    const handleDeviceChange = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+
+        // Filter devices by type
+        const audioInput = devices
+          .filter((device) => device.kind === "audioinput")
+          .map((device) => ({
+            deviceId: device.deviceId,
+            label: device.label,
+          }));
+
+        const videoInput = devices
+          .filter((device) => device.kind === "videoinput")
+          .map((device) => ({
+            deviceId: device.deviceId,
+            label: device.label,
+          }));
+
+        // Update state with new device lists
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          audioInput: audioInput,
+          videoInput: videoInput,
+        }));
+
+        // Save to storage
+        chrome.storage.local.set({
+          audioInput: audioInput,
+          videoInput: videoInput,
+        });
+        
+        // Check if current active devices are still available
+        if (contentStateRef.current.micActive && contentStateRef.current.defaultAudioInput !== "none") {
+          const audioDeviceStillExists = audioInput.some(device => device.deviceId === contentStateRef.current.defaultAudioInput);
+          if (!audioDeviceStillExists) {
+            const available = audioInput.length > 0 ? await checkDeviceAvailability('audio', audioInput[0].deviceId) : false;
+            setContentState((prevContentState) => ({
+              ...prevContentState,
+              defaultAudioInput: audioInput.length > 0 ? audioInput[0].deviceId : "none",
+              micActive: available,
+            }));
+            chrome.storage.local.set({
+              defaultAudioInput: audioInput.length > 0 ? audioInput[0].deviceId : "none",
+              micActive: available,
+            });
+          }
+        }
+        
+        if (contentStateRef.current.cameraActive && contentStateRef.current.defaultVideoInput !== "none") {
+          const videoDeviceStillExists = videoInput.some(device => device.deviceId === contentStateRef.current.defaultVideoInput);
+          if (!videoDeviceStillExists) {
+            const available = videoInput.length > 0 ? await checkDeviceAvailability('video', videoInput[0].deviceId) : false;
+            setContentState((prevContentState) => ({
+              ...prevContentState,
+              defaultVideoInput: videoInput.length > 0 ? videoInput[0].deviceId : "none",
+              cameraActive: available,
+            }));
+            chrome.storage.local.set({
+              defaultVideoInput: videoInput.length > 0 ? videoInput[0].deviceId : "none",
+              cameraActive: available,
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Error during device change detection:", err);
+      }
+    };
+
+    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+
+    // Cleanup listener
+    return () => {
+      navigator.mediaDevices.removeEventListener(
+        "devicechange",
+        handleDeviceChange
+      );
+    };
+  }, [checkDeviceAvailability]);
+
+  useEffect(() => {
+    const handleDeviceChange = async () => {
+      try {
+        // Request permission to get device labels
+        await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+        
+        // Get updated device list
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioInput = devices.filter((device) => device.kind === "audioinput");
+        const videoInput = devices.filter((device) => device.kind === "videoinput");
+        
+        // Update device lists in state
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          audioInput,
+          videoInput,
+        }));
+        
+        // If camera is active, check if selected device still exists
+        if (contentStateRef.current.cameraActive && contentStateRef.current.defaultVideoInput !== "none") {
+          const videoDeviceStillExists = videoInput.some(device => device.deviceId === contentStateRef.current.defaultVideoInput);
+          
+          if (!videoDeviceStillExists) {
+            // Try to find the device by label instead of deviceId
+            const { cameraLabel } = await chrome.storage.local.get(['cameraLabel']);
+            if (cameraLabel) {
+              const matchedDevice = videoInput.find(device => device.label === cameraLabel);
+              if (matchedDevice) {
+                const available = await checkDeviceAvailability('video', matchedDevice.deviceId);
+                setContentState((prevContentState) => ({
+                  ...prevContentState,
+                  defaultVideoInput: matchedDevice.deviceId,
+                  cameraActive: available,
+                }));
+                chrome.storage.local.set({
+                  defaultVideoInput: matchedDevice.deviceId,
+                  cameraActive: available,
+                });
+                return;
+              }
+            }
+            
+            // Fall back to first available device if no match by label
+            const available = videoInput.length > 0 ? await checkDeviceAvailability('video', videoInput[0].deviceId) : false;
+            setContentState((prevContentState) => ({
+              ...prevContentState,
+              defaultVideoInput: videoInput.length > 0 ? videoInput[0].deviceId : "none",
+              cameraActive: available,
+            }));
+            chrome.storage.local.set({
+              defaultVideoInput: videoInput.length > 0 ? videoInput[0].deviceId : "none",
+              cameraActive: available,
+            });
+          }
+        }
+      } catch (err) {
+        console.error("Error during device change detection:", err);
+      }
+    };
+
+    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
+
+    // Cleanup listener
+    return () => {
+      navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
+    };
+  }, [checkDeviceAvailability]);
+
+  const toggleDeviceWithCheck = useCallback(async (deviceType, isActive, deviceId) => {
+    if (isActive) {
+      // User is trying to activate the device, verify it's available
+      const available = await checkDeviceAvailability(
+        deviceType, 
+        deviceType === 'audio' ? contentStateRef.current.defaultAudioInput : contentStateRef.current.defaultVideoInput
+      );
+      
+      if (!available) {
+        // Device isn't available, don't change state to active
+        return false;
+      }
+    }
+    
+    // Update state based on device type
+    if (deviceType === 'audio') {
+      setContentState((prevContentState) => ({
+        ...prevContentState,
+        micActive: isActive,
+      }));
+      chrome.storage.local.set({ micActive: isActive });
+      
+      chrome.runtime.sendMessage({
+        type: "set-mic-active-tab",
+        active: isActive,
+        defaultAudioInput: deviceId || contentStateRef.current.defaultAudioInput,
+      });
+    } else if (deviceType === 'video') {
+      setContentState((prevContentState) => ({
+        ...prevContentState,
+        cameraActive: isActive,
+      }));
+      chrome.storage.local.set({ cameraActive: isActive });
+      
+      chrome.runtime.sendMessage({
+        type: "set-camera-active-tab",
+        active: isActive,
+        defaultVideoInput: deviceId || contentStateRef.current.defaultVideoInput,
+      });
+    }
+    
+    return true;
+  }, [checkDeviceAvailability]);
+
+  const toggleDeviceActive = useCallback(async (deviceType, isActive, deviceId) => {
+    if (deviceType === 'video') {
+      // Get the device label for the selected camera
+      let deviceLabel = null;
+      if (isActive && deviceId) {
+        try {
+          await navigator.mediaDevices.getUserMedia({ video: true });
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const videoDevice = devices.find(d => d.kind === 'videoinput' && d.deviceId === deviceId);
+          deviceLabel = videoDevice?.label || null;
+        } catch (err) {
+          console.error("Failed to get device label:", err);
+        }
+      }
+      
+      setContentState((prevContentState) => ({
+        ...prevContentState,
+        cameraActive: isActive,
+      }));
+      chrome.storage.local.set({ cameraActive: isActive });
+      
+      chrome.runtime.sendMessage({
+        type: "set-camera-active-tab",
+        active: isActive,
+        defaultVideoInput: deviceId || contentStateRef.current.defaultVideoInput,
+        label: deviceLabel
+      });
+    } else if (deviceType === 'audio') {
+      // ...existing code for microphone...
+    }
+    
+    return true;
+  }, [checkDeviceAvailability]);
 
   // These settings are available throughout the Content
   const [contentState, setContentState] = useState({
@@ -689,6 +959,7 @@ const ContentState = (props) => {
     hasOpenedBefore: false,
     qualityValue: "720p",
     fpsValue: "30",
+    toggleDeviceWithCheck: toggleDeviceWithCheck,
   });
   contentStateRef.current = contentState;
 

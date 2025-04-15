@@ -213,9 +213,11 @@ if (chrome.permissions) {
       addAlarmListener();
     }
   });
-}
+};
 
 const onActivated = async (activeInfo) => {
+  console.log("Tab activated:", activeInfo.tabId); // Debugging log
+
   const { recordingStartTime } = await chrome.storage.local.get([
     "recordingStartTime",
   ]);
@@ -228,6 +230,31 @@ const onActivated = async (activeInfo) => {
 
   // Update active tab
   if (recording) {
+    // Deactivate camera in all other tabs
+    const { cameraActiveTab, cameraLabel } = await chrome.storage.local.get([
+      "cameraActiveTab",
+      "cameraLabel",
+    ]);
+
+    if (cameraActiveTab && cameraActiveTab !== activeInfo.tabId) {
+      console.log(`Deactivating camera in tab: ${cameraActiveTab}`); // Debugging log
+      sendMessageTab(cameraActiveTab, { type: "deactivate-camera" });
+    }
+
+    // Set the current tab as the active camera tab
+    chrome.storage.local.set({ cameraActiveTab: activeInfo.tabId });
+
+    // Activate the camera in the current tab with the stored label
+    if (cameraLabel) {
+      console.log(`Activating camera in tab: ${activeInfo.tabId} with label: ${cameraLabel}`); // Debugging log
+      sendMessageTab(activeInfo.tabId, {
+        type: "activate-camera-by-label",
+        cameraLabel: cameraLabel,
+      });
+    } else {
+      console.warn("No camera label found in storage. Camera will not be activated.");
+    }
+
     // Check if region recording, and if the recording tab is the same as the current tab
     const { tabRecordedID } = await chrome.storage.local.get(["tabRecordedID"]);
     if (tabRecordedID && tabRecordedID != activeInfo.tabId) {
@@ -239,7 +266,11 @@ const onActivated = async (activeInfo) => {
         tab.url.includes("chrome-extension://")
       )
     ) {
-      chrome.storage.local.set({ activeTab: activeInfo.tabId });
+      setCameraActiveTab({
+        active: true, // Assuming the camera should be active for the new tab
+        label: "default-camera-label", // Replace with the actual camera label if available
+        tabId: activeInfo.tabId
+      });
     }
 
     // Check if region or customRegion is set
@@ -274,8 +305,11 @@ const onActivated = async (activeInfo) => {
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) {
+    console.log("Window focus lost"); // Debugging log
     return;
   }
+
+  console.log(`Window focused: ${windowId}`); // Debugging log
 
   // Get the tab that is active in the focused window
   const [activeTab] = await chrome.tabs.query({
@@ -295,11 +329,28 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
 
 // Check when a user navigates to a different domain in the same tab (chrome.tabs?)
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+
   if (changeInfo.status === "complete") {
+    console.log("Tab updated Complete:", tabId, changeInfo, tab); // Debugging log
     // Check if not recording (needs to hide the extension)
     const { recording } = await chrome.storage.local.get(["recording"]);
     const { restarting } = await chrome.storage.local.get(["restarting"]);
     const { tabRecordedID } = await chrome.storage.local.get(["tabRecordedID"]);
+    
+    // Also get cameraActiveTab to manage camera across tabs
+    const { cameraActiveTab, cameraLabel } = await chrome.storage.local.get([
+      "cameraActiveTab", 
+      "cameraLabel"
+    ]);
+
+    // If this tab should have camera active and it's different from currently active camera tab
+    if (cameraLabel && tabId !== cameraActiveTab) {
+      // Tell the tab to activate camera by label
+      sendMessageTab(tabId, { 
+        type: "activate-camera-by-label", 
+        cameraLabel: cameraLabel 
+      });
+    }
 
     if (!recording && !restarting) {
       sendMessageTab(tabId, { type: "recording-ended" });
@@ -472,6 +523,14 @@ const stopRecording = async () => {
   });
 
   chrome.storage.local.set({ recordingStartTime: 0 });
+
+  // Deactivate camera in all tabs
+  chrome.tabs.query({}, (tabs) => {
+    tabs.forEach((tab) => {
+      sendMessageTab(tab.id, { type: "deactivate-camera" });
+    });
+  });
+  chrome.storage.local.set({ cameraActiveTab: null });
 
   if (duration > maxDuration) {
     // Close the sandbox tab, open a new one with fallback editor
@@ -1524,6 +1583,7 @@ const setSurface = async (request) => {
 
 const handlePip = async (started = false) => {
   const { activeTab } = await chrome.storage.local.get(["activeTab"]);
+
   if (started) {
     sendMessageTab(activeTab, { type: "pip-started" });
   } else {
@@ -1578,6 +1638,29 @@ const checkAvailableMemory = (sendResponse) => {
   navigator.storage.estimate().then((data) => {
     sendResponse({ data: data });
   });
+};
+
+// Function to handle setting a camera active in a tab
+const setCameraActiveTab = async (request) => {
+  const { cameraActiveTab } = await chrome.storage.local.get(["cameraActiveTab"]);
+  const label = request.label || (await chrome.storage.local.get(["cameraLabel"])).cameraLabel;
+
+  if (cameraActiveTab && cameraActiveTab !== request.tabId && request.active) {
+    sendMessageTab(cameraActiveTab, { type: "deactivate-camera" });
+  }
+
+  if (request.active && label) {
+    chrome.storage.local.set({ 
+      cameraLabel: label,
+      cameraActiveTab: request.tabId 
+    });
+  } else if (!request.active) {
+    if (cameraActiveTab === request.tabId) {
+      chrome.storage.local.set({ cameraActiveTab: null });
+    }
+  }
+  
+  return true;
 };
 
 // Listen for messages
@@ -1761,9 +1844,57 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     );
   } else if (request.type === "add-alarm-listener") {
     addAlarmListener();
+  } else if (request.type === "set-camera-active-tab") {
+    setCameraActiveTab({
+      active: request.active,
+      defaultVideoInput: request.defaultVideoInput,
+      label: request.label,
+      tabId: sender.tab.id
+    });
+  } else if (request.type === "switch-camera") {
+    // Store the selected camera label for cross-tab consistency
+    if (request.label) {
+      chrome.storage.local.set({ 
+        cameraLabel: request.label,
+        cameraActiveTab: sender.tab.id
+      });
+      
+      // Update any other open tabs that may need to know about this change
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach(tab => {
+          if (tab.id !== sender.tab.id) {
+            sendMessageTab(tab.id, { 
+              type: "camera-selection-changed",
+              cameraLabel: request.label
+            });
+          }
+        });
+      });
+    }
+  } else if (request.type === "get-stored-camera") {
+    // Provide the stored camera label to any tab that requests it
+    chrome.storage.local.get(["cameraLabel"], (result) => {
+      sendResponse({ cameraLabel: result.cameraLabel });
+    });
+    return true; // Keep the message channel open for the async response
+  } else if (request.type === "deactivate-camera") {
+    // Deactivate the camera in the current tab
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        sendMessageTab(tabs[0].id, { type: "deactivate-camera" });
+      }
+    });
   }
 });
 
-// self.addEventListener("message", (event) => {
-//   handleMessage(event.data);
-// });
+chrome.runtime.onConnect.addListener((port) => {
+  port.onDisconnect.addListener(() => {
+    console.log("Port Closed");
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+      if (tabs[0]) {
+        sendMessageTab(tab[0].id, { type: "deactivate-camera" });
+        chrome.tabs.sendMessage(tabs[0].id, { type: "popup-closed" });
+      }
+    });
+  });
+});

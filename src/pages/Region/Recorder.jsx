@@ -5,6 +5,7 @@ import React, {
   useCallback,
   useContext,
 } from "react";
+import { detectOptimalScreenResolution } from "../../utils/resolutionHelper";
 
 import localforage from "localforage";
 
@@ -506,9 +507,24 @@ const Recorder = () => {
       let width = 1920;
       let height = 1080;
 
-      if (qualityValue === "4k") {
-        width = 4096;
+      if (qualityValue === "auto") {
+        // Use automatic resolution detection for auto setting
+        try {
+          const optimalRes = await detectOptimalScreenResolution();
+          width = optimalRes.width;
+          height = optimalRes.height;
+          console.log(`Using automatically detected resolution: ${width}x${height}`);
+        } catch (err) {
+          console.error("Error detecting optimal resolution, using 1080p fallback:", err);
+          width = 1920;
+          height = 1080;
+        }
+      } else if (qualityValue === "4k") {
+        width = 3840;
         height = 2160;
+      } else if (qualityValue === "2k") {
+        width = 2560;
+        height = 1440;
       } else if (qualityValue === "1080p") {
         width = 1920;
         height = 1080;

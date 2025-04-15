@@ -151,6 +151,161 @@ const SettingsMenu = (props) => {
     setHeight(Math.round(window.screen.height * window.devicePixelRatio));
   }, []);
 
+  // Function to determine optimal resolution based on screen and RAM
+  const determineOptimalResolution = () => {
+    if (width === 0 || height === 0) return "1080p";
+    
+    const ram = navigator.deviceMemory || 4; // Default to 4GB if not available
+    
+    console.log("DEBUG - Screen resolution detection:");
+    console.log(`Screen dimensions: ${width}x${height} (with pixel ratio: ${window.devicePixelRatio})`);
+    console.log(`Raw screen dimensions: ${window.screen.width}x${window.screen.height}`);
+    console.log(`Available RAM: ${ram}GB`);
+    
+    // Check hardware capabilities and select appropriate resolution
+    if (ram >= 8 && width >= 3840 && height >= 2160) {
+      console.log("Selected resolution: 4k (based on 4K display capabilities)");
+      return "4k";
+    } else if (ram >= 6 && width >= 2560 && height >= 1440) {
+      console.log("Selected resolution: 2k (based on 2K display capabilities)");
+      return "2k";
+    } else if (ram >= 4 && width >= 1920 && height >= 1080) {
+      console.log("Selected resolution: 1080p (based on FHD display capabilities)");
+      return "1080p";
+    } else if (ram >= 2 && width >= 1280 && height >= 720) {
+      console.log("Selected resolution: 720p (based on HD display capabilities)");
+      return "720p";
+    } else if (width >= 854 && height >= 480) {
+      console.log("Selected resolution: 480p (based on limited display capabilities)");
+      return "480p";
+    } else if (width >= 640 && height >= 360) {
+      console.log("Selected resolution: 360p (based on minimal display capabilities)");
+      return "360p";
+    } else {
+      console.log("Selected resolution: 240p (fallback for very small displays)");
+      return "240p";
+    }
+  };
+
+  // Fix screen resolution detection
+  useEffect(() => {
+    // Get the actual screen dimensions, not just the window dimensions
+    const actualWidth = Math.round(window.screen.width * window.devicePixelRatio);
+    const actualHeight = Math.round(window.screen.height * window.devicePixelRatio);
+    
+    console.log(`Setting screen dimensions to: ${actualWidth}x${actualHeight}`);
+    
+    setWidth(actualWidth);
+    setHeight(actualHeight);
+  }, []);
+
+  // Update contentState with stored quality value when component mounts
+  useEffect(() => {
+    chrome.storage.local.get(["qualityValue"], (result) => {
+      if (result.qualityValue) {
+        console.log(`Initializing UI with stored resolution: ${result.qualityValue}`);
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          qualityValue: result.qualityValue,
+        }));
+      }
+    });
+  }, []);
+
+  // Initialize resolution automatically when the component first loads
+  useEffect(() => {
+    if (width === 0 || height === 0) return;
+    
+    try {
+      // Force determine the optimal resolution for debugging purposes
+      const debugOptimalRes = determineOptimalResolution();
+      console.log(`Debug: Optimal resolution would be: ${debugOptimalRes}`);
+      
+      // Check if the current resolution makes sense for this display
+      const currentRes = contentState.qualityValue;
+      console.log(`Current resolution setting: ${currentRes}`);
+      
+      // Get the resolution from storage
+      chrome.storage.local.get(["qualityValue", "autoResolutionChecked"], (result) => {
+        console.log(`Storage resolution: ${result.qualityValue}`);
+        console.log(`Auto resolution checked before: ${result.autoResolutionChecked}`);
+        
+        // If resolution isn't set or we haven't done auto check yet, set optimal resolution
+        if (!result.qualityValue || !result.autoResolutionChecked) {
+          const optimalRes = determineOptimalResolution();
+          console.log(`Setting optimal resolution: ${optimalRes}`);
+          
+          // Update both local state and storage
+          setContentState((prevContentState) => ({
+            ...prevContentState,
+            qualityValue: optimalRes,
+          }));
+          
+          chrome.storage.local.set({
+            qualityValue: optimalRes,
+            autoResolutionChecked: true
+          });
+        } else {
+          console.log(`Using user-selected resolution: ${result.qualityValue}`);
+          
+          // If screen resolution has increased significantly, suggest a better option
+          if (result.qualityValue === "480p" && width >= 2560 && height >= 1440) {
+            console.log("Display is capable of 2K resolution but using 480p!");
+            
+            // Update to better resolution
+            const optimalRes = determineOptimalResolution();
+            console.log(`Updating to better resolution: ${optimalRes}`);
+            
+            // Update both local state and storage
+            setContentState((prevContentState) => ({
+              ...prevContentState,
+              qualityValue: optimalRes,
+            }));
+            
+            chrome.storage.local.set({
+              qualityValue: optimalRes,
+              autoResolutionChecked: true
+            });
+          }
+          
+          // Ensure UI reflects the stored value even if not changing it
+          if (currentRes !== result.qualityValue) {
+            console.log(`Syncing UI state with storage value: ${result.qualityValue}`);
+            setContentState((prevContentState) => ({
+              ...prevContentState,
+              qualityValue: result.qualityValue,
+            }));
+          }
+        }
+      });
+    } catch (error) {
+      console.error("Error determining resolution:", error);
+    }
+  }, [width, height]);
+
+  // Add a debug function to manually reset UI to match storage
+  const resyncUIWithStorage = () => {
+    chrome.storage.local.get(["qualityValue"], (result) => {
+      if (result.qualityValue) {
+        console.log(`Manually resyncing UI with storage value: ${result.qualityValue}`);
+        setContentState((prevContentState) => ({
+          ...prevContentState,
+          qualityValue: result.qualityValue,
+        }));
+      }
+    });
+  };
+
+  // Call this function once when component mounts to ensure UI is correct
+  useEffect(() => {
+    // Add a small delay to ensure storage has been updated
+    const timer = setTimeout(() => {
+      resyncUIWithStorage();
+    }, 1000);
+    
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <DropdownMenu.Root
       open={props.open}
@@ -217,6 +372,27 @@ const SettingsMenu = (props) => {
                     disabled={width < 3840 || height < 2160}
                   >
                     3840 x 2160 (4k)
+                  </DropdownMenu.Item>
+                </TooltipWrap>
+                <TooltipWrap
+                  content={
+                    width < 2560 || height < 1440
+                      ? chrome.i18n.getMessage("screenTooSmallTooltip")
+                      : ""
+                  }
+                >
+                  <DropdownMenu.Item
+                    className="ScreenityDropdownMenuItem"
+                    onClick={(e) => {
+                      chrome.runtime.sendMessage({
+                        type: "resize-window",
+                        width: 2560,
+                        height: 1440,
+                      });
+                    }}
+                    disabled={width < 2560 || height < 1440}
+                  >
+                    2560 x 1440 (2k)
                   </DropdownMenu.Item>
                 </TooltipWrap>
                 <TooltipWrap
@@ -355,15 +531,18 @@ const SettingsMenu = (props) => {
                 <DropdownMenu.RadioGroup
                   value={contentState.qualityValue}
                   onValueChange={(value) => {
+                    console.log(`User selected resolution: ${value}`);
                     setContentState((prevContentState) => ({
                       ...prevContentState,
                       qualityValue: value,
                     }));
                     chrome.storage.local.set({
                       qualityValue: value,
+                      autoResolutionChecked: true, // User has now explicitly set a resolution
                     });
                   }}
                 >
+                  {/* Auto option removed - automatic resolution is now handled by determineOptimalResolution() */}
                   <TooltipWrap
                     content={
                       RAM < 8 || width < 3840 || height < 2160
@@ -377,6 +556,24 @@ const SettingsMenu = (props) => {
                       disabled={RAM < 8 || width < 3840 || height < 2160}
                     >
                       4k
+                      <DropdownMenu.ItemIndicator className="ScreenityItemIndicator">
+                        <img src={CheckWhiteIcon} />
+                      </DropdownMenu.ItemIndicator>
+                    </DropdownMenu.RadioItem>
+                  </TooltipWrap>
+                  <TooltipWrap
+                    content={
+                      RAM < 6 || width < 2560 || height < 1440
+                        ? chrome.i18n.getMessage("maxResolutionTooltip")
+                        : ""
+                    }
+                  >
+                    <DropdownMenu.RadioItem
+                      className="ScreenityDropdownMenuItem"
+                      value="2k"
+                      disabled={RAM < 6 || width < 2560 || height < 1440}
+                    >
+                      2k
                       <DropdownMenu.ItemIndicator className="ScreenityItemIndicator">
                         <img src={CheckWhiteIcon} />
                       </DropdownMenu.ItemIndicator>
@@ -535,9 +732,6 @@ const SettingsMenu = (props) => {
                     className="ScreenityDropdownMenuItem"
                     value="1"
                   >
-                    <DropdownMenu.ItemIndicator className="ScreenityItemIndicator">
-                      <img src={CheckWhiteIcon} />
-                    </DropdownMenu.ItemIndicator>
                     1
                     <DropdownMenu.ItemIndicator className="ScreenityItemIndicator">
                       <img src={CheckWhiteIcon} />

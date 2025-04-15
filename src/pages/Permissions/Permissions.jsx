@@ -99,11 +99,25 @@ const Recorder = () => {
       // Save in Chrome local storage
       chrome.storage.local.set({
         // Set available devices
-        audioinput: audioinput,
+        audioInput: audioinput, // Changed from audioinput to audioInput
         audiooutput: audiooutput,
-        videoinput: videoinput,
+        videoInput: videoinput, // Changed from videoinput to videoInput
         cameraPermission: camGranted,
         microphonePermission: micGranted,
+      });
+
+      // Migration logic to handle existing lowercase keys
+      chrome.storage.local.get(["audioinput", "videoinput"], (result) => {
+        if (result.audioinput && !result.audioInput) {
+          chrome.storage.local.set({
+            audioInput: result.audioinput,
+          });
+        }
+        if (result.videoinput && !result.videoInput) {
+          chrome.storage.local.set({
+            videoInput: result.videoinput,
+          });
+        }
       });
 
       // Post message to parent window

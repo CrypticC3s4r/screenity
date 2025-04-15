@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import localforage from "localforage";
+import { detectOptimalScreenResolution } from "../../utils/resolutionHelper";
 
 localforage.config({
   driver: localforage.INDEXEDDB, // or choose another driver
@@ -341,9 +342,24 @@ const RecorderOffscreen = () => {
     let width = 1920;
     let height = 1080;
 
-    if (qualityValue === "4k") {
+    if (qualityValue === "auto") {
+      // Use automatic resolution detection for auto setting
+      try {
+        const optimalRes = await detectOptimalScreenResolution();
+        width = optimalRes.width;
+        height = optimalRes.height;
+        console.log(`Using automatically detected resolution: ${width}x${height}`);
+      } catch (err) {
+        console.error("Error detecting optimal resolution, using 1080p fallback:", err);
+        width = 1920;
+        height = 1080;
+      }
+    } else if (qualityValue === "4k") {
       width = 4096;
       height = 2160;
+    } else if (qualityValue === "2k") {
+      width = 2560;
+      height = 1440;
     } else if (qualityValue === "1080p") {
       width = 1920;
       height = 1080;
