@@ -1,6 +1,9 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import Background from "./modules/Background";
 
+// Context
+import { contentStateContext } from "../Content/context/ContentState";
+
 const Camera = () => {
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(0);
@@ -16,6 +19,20 @@ const Camera = () => {
   // Offscreen canvas for getting video frame
   const offScreenCanvasRef = useRef(null);
   const offScreenCanvasContextRef = useRef(null);
+
+  // Add a utility function to show toast notifications via chrome messaging
+  const showToast = useCallback((message) => {
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        chrome.runtime.sendMessage({
+          type: "show-toast",
+          message: message
+        });
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, cannot show toast");
+    }
+  }, []);
 
   // Add a utility function to safely send chrome messages
   const safeChromeMessage = useCallback((message, callback = null) => {
@@ -57,7 +74,7 @@ const Camera = () => {
     return devices.find(device => device.label === targetLabel);
   };
 
-  // Enhanced stopCameraStream to properly clean up resources
+  // Enhanced stopCameraStream to properly clean up resources and wait for virtual cameras
   const stopCameraStream = useCallback(() => {
     console.log("Stopping camera stream and cleaning up resources");
     
@@ -100,26 +117,73 @@ const Camera = () => {
       console.error("Error while stopping camera stream:", error);
     }
     
-    // Force a small delay to ensure resources are released
+    // Extended delay to ensure virtual camera software (like NVIDIA Broadcast) releases the device
     return new Promise(resolve => {
       setTimeout(() => {
-        console.log("Camera resources should now be released");
+        console.log("Camera resources should now be released (extended delay for virtual cameras)");
         resolve();
-      }, 100);
+      }, 800); // Increased from 100ms to 800ms for virtual cameras
     });
   }, [safeChromeMessage]);
 
-  // Enhanced getCameraStream to handle various constraint formats
-  const getCameraStream = useCallback(async (constraints = { video: true }) => {
+  // Enhanced getCameraStream to handle device conflicts and virtual cameras
+  const getCameraStream = useCallback(async (constraints = { video: true }, retryCount = 0, reuseExisting = false) => {
+    const MAX_RETRIES = 3;
+    const RETRY_DELAY = 1000; // 1 second between retries
+    
     try {
-      // Stop any existing stream first
-      await stopCameraStream();
+      // Check if we can reuse existing stream (for tab switching during recording)
+      if (reuseExisting && streamRef.current) {
+        const existingTracks = streamRef.current.getVideoTracks();
+        if (existingTracks.length > 0) {
+          const existingTrack = existingTracks[0];
+          const existingSettings = existingTrack.getSettings();
+          
+          // Check if the existing stream matches the requested constraints
+          if (constraints.video && constraints.video.deviceId && constraints.video.deviceId.exact) {
+            if (existingSettings.deviceId === constraints.video.deviceId.exact) {
+              console.log("Reusing existing camera stream for same device");
+              
+              // Ensure video element is connected
+              if (videoRef.current && videoRef.current.srcObject !== streamRef.current) {
+                videoRef.current.srcObject = streamRef.current;
+                videoRef.current.play();
+              }
+              
+              // Update active tab info
+              safeChromeMessage({
+                type: "set-camera-active-tab",
+                active: true,
+                defaultVideoInput: existingSettings.deviceId,
+                label: existingTrack.label
+              });
+              
+              return streamRef.current;
+            }
+          }
+        }
+      }
       
-      console.log("Getting camera stream with constraints:", constraints);
+      // Only stop existing stream if we're not reusing it
+      if (!reuseExisting) {
+        await stopCameraStream();
+        // Add extra delay for virtual camera software to release devices
+        await new Promise(resolve => setTimeout(resolve, 300)); // Reduced from 500ms
+      }
+      
+      console.log("Getting camera stream with constraints:", constraints, `(attempt ${retryCount + 1})`);
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
-      // Store stream reference
+      // Success! Set up the stream
       streamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+      }
+      
+      // Show success notification for camera switching (but not for initial load)
+      if (retryCount > 0) {
+        showToast("Camera switched successfully");
+      }
       
       // Get video track details for sizing
       const videoTrack = stream.getVideoTracks()[0];
@@ -130,9 +194,6 @@ const Camera = () => {
       }
       
       if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        
-        // Set up canvas once the video loads
         videoRef.current.onloadedmetadata = () => {
           videoRef.current.play();
           
@@ -162,25 +223,87 @@ const Camera = () => {
           });
         }
       }
+      
+      console.log("Camera stream obtained successfully");
+      return stream;
     } catch (error) {
       console.error("Error accessing camera:", error);
       
-      // If specific device fails, try fallback to any camera
-      if (constraints.video && constraints.video.deviceId && constraints.video.deviceId.exact) {
-        console.log("Trying fallback to any camera...");
-        try {
-          await getCameraStream({ video: true });
-        } catch (fallbackError) {
-          console.error("Fallback camera also failed:", fallbackError);
+      // Handle specific device conflict errors
+      if (error.name === 'NotReadableError' || 
+          error.message.includes('already in use') || 
+          error.message.includes('Could not start video source')) {
+        
+        if (retryCount < MAX_RETRIES) {
+          console.log(`Camera device conflict detected, retrying in ${RETRY_DELAY}ms... (attempt ${retryCount + 1}/${MAX_RETRIES})`);
+          
+          // Wait longer before retry to allow virtual camera software to release the device
+          await new Promise(resolve => setTimeout(resolve, RETRY_DELAY));
+          
+          // Retry with exponential backoff
+          return getCameraStream(constraints, retryCount + 1, false);
+        } else {
+          console.error("Camera device still in use after maximum retries. This may be due to virtual camera software like NVIDIA Broadcast.");
+          
+          // Show user-friendly error notification
+          showToast("Camera is in use by another application. Please close other camera apps and try again.");
+          
+          // Try fallback to any available camera as last resort
+          if (constraints.video && constraints.video.deviceId && constraints.video.deviceId.exact) {
+            console.log("Trying fallback to any available camera...");
+            try {
+              await new Promise(resolve => setTimeout(resolve, 1000)); // Extra delay before fallback
+              await getCameraStream({ video: true }, 0, false);
+            } catch (fallbackError) {
+              console.error("Fallback camera also failed:", fallbackError);
+            }
+          }
+        }
+      } else {
+        // For other types of errors, try fallback immediately
+        if (constraints.video && constraints.video.deviceId && constraints.video.deviceId.exact) {
+          console.log("Trying fallback to any camera...");
+          try {
+            await getCameraStream({ video: true }, 0, false);
+          } catch (fallbackError) {
+            console.error("Fallback camera also failed:", fallbackError);
+          }
         }
       }
     }
-  }, [stopCameraStream, safeChromeMessage]);
+  }, [stopCameraStream, safeChromeMessage, showToast]);
 
   // Function to activate camera by label (for cross-tab consistency)
-  const activateCameraByLabel = useCallback(async (cameraLabel) => {
+  const activateCameraByLabel = useCallback(async (cameraLabel, isTabSwitch = false) => {
     try {
-      console.log(`Attempting to activate camera with label: ${cameraLabel}`);
+      console.log(`Attempting to activate camera with label: ${cameraLabel}${isTabSwitch ? ' (tab switch)' : ''}`);
+      
+      // For tab switches during recording, try to reuse existing stream first
+      if (isTabSwitch && streamRef.current) {
+        const existingTracks = streamRef.current.getVideoTracks();
+        if (existingTracks.length > 0 && existingTracks[0].label === cameraLabel) {
+          console.log("Reusing existing stream for tab switch - same camera already active");
+          
+          // Ensure video element is connected and playing
+          if (videoRef.current) {
+            if (videoRef.current.srcObject !== streamRef.current) {
+              videoRef.current.srcObject = streamRef.current;
+            }
+            videoRef.current.play();
+          }
+          
+          // Update active tab info
+          const settings = existingTracks[0].getSettings();
+          safeChromeMessage({
+            type: "set-camera-active-tab",
+            active: true,
+            defaultVideoInput: settings.deviceId,
+            label: existingTracks[0].label
+          });
+          
+          return;
+        }
+      }
       
       // Request access to camera to get device list with labels
       const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
@@ -199,7 +322,7 @@ const Camera = () => {
           video: {
             deviceId: { exact: matchedDevice.deviceId }
           }
-        });
+        }, 0, isTabSwitch);
       } else {
         console.warn(`No camera found matching label: ${cameraLabel}`);
         // Fall back to first available camera
@@ -209,13 +332,13 @@ const Camera = () => {
             video: {
               deviceId: { exact: videoInputs[0].deviceId }
             }
-          });
+          }, 0, false);
         }
       }
     } catch (error) {
       console.error("Error activating camera by label:", error);
     }
-  }, [getCameraStream]);
+  }, [getCameraStream, safeChromeMessage]);
 
   useEffect(() => {
     backgroundEffectsRef.current = backgroundEffects;
@@ -281,10 +404,13 @@ const Camera = () => {
           } else {
             console.log("Switch-camera request with deviceId:", request.id);
             
+            // Show toast notification for camera switching
+            showToast("Switching camera...");
+            
             // Stop stream completely before starting a new one
             await stopCameraStream();
             
-            // Start the new camera with a short delay to ensure cleanup is complete
+            // Extended delay for virtual camera switching (NVIDIA Broadcast, OBS, etc.)
             setTimeout(() => {
               getCameraStream({
                 video: {
@@ -293,18 +419,44 @@ const Camera = () => {
                   },
                 },
               });
-            }, 300);
+            }, 1200); // Increased from 300ms to 1200ms for virtual camera switching
           }
         } else if (request.type === "activate-camera-by-label") {
           console.log("Received activate-camera-by-label request:", request);
           if (request.cameraLabel) {
-            // Add a small delay to ensure component is ready and prevent race conditions
+            // Detect if this is a tab switch during recording for faster activation
+            const isTabSwitch = request.isTabSwitch || false;
+            
+            // Reduced delay for tab switches, no delay for stream reuse
+            const delay = isTabSwitch ? 50 : 100;
             setTimeout(() => {
-              activateCameraByLabel(request.cameraLabel);
-            }, 100);
+              activateCameraByLabel(request.cameraLabel, isTabSwitch);
+            }, delay);
           }
         } else if (request.type === "deactivate-camera") {
           console.log("Received deactivate-camera request");
+          
+          // For explicit deactivation (like recording end), always stop the camera
+          if (request.force || !streamRef.current) {
+            console.log("Force deactivating camera or no stream active");
+            await stopCameraStream();
+            return;
+          }
+          
+          // Check if we're recording - if so, only deactivate if explicitly requested
+          // This prevents unnecessary camera stops during tab switches
+          try {
+            if (chrome.runtime && chrome.runtime.id) {
+              const result = await chrome.storage.local.get(["recording"]);
+              if (result.recording) {
+                console.log("Recording in progress - camera deactivation will be handled by tab switch logic");
+                return; // Don't stop the camera during recording tab switches
+              }
+            }
+          } catch (error) {
+            console.log("Extension context invalidated during recording check");
+          }
+          
           await stopCameraStream();
         } else if (request.type === "popup-closed") {
           console.log("Received popup-closed request - stopping camera stream");
@@ -388,7 +540,7 @@ const Camera = () => {
                   },
                 },
               });
-            }, 300);
+            }, 1200); // Extended delay for virtual camera switching
             setPipMode(false);
           } else {
             stopCameraStream();

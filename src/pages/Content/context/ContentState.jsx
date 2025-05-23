@@ -1273,9 +1273,9 @@ const ContentState = (props) => {
           pendingRecording: false,
         }));
       } else if (request.type === "deactivate-camera") {
-        // Only deactivate camera if we're not recording
-        // During recording, camera state should be managed by the background script
-        if (!contentStateRef.current.recording && !contentStateRef.current.pendingRecording) {
+        // Force deactivation if requested (e.g., when recording ends) or if not recording
+        if (request.force || (!contentStateRef.current.recording && !contentStateRef.current.pendingRecording)) {
+          console.log(`Deactivating camera${request.force ? ' (forced)' : ''}`);
           setContentState((prevContentState) => ({
             ...prevContentState,
             cameraActive: false,
@@ -1297,8 +1297,9 @@ const ContentState = (props) => {
           console.log("Ignoring camera deactivation during recording - background script handles camera coordination");
         }
       } else if (request.type === "popup-closed") {
-        // Handle popup close - stop camera and mic if not recording
-        if (!contentStateRef.current.recording && !contentStateRef.current.pendingRecording) {
+        // Handle popup close - stop camera and mic if not recording or if forced
+        if (request.force || (!contentStateRef.current.recording && !contentStateRef.current.pendingRecording)) {
+          console.log(`Handling popup close${request.force ? ' (forced)' : ''}`);
           setContentState((prevContentState) => ({
             ...prevContentState,
             cameraActive: false,
@@ -1325,6 +1326,11 @@ const ContentState = (props) => {
             }
           } catch (error) {
             console.log("Extension context invalidated during popup close handling");
+          }
+        } else if (request.type === "show-toast") {
+          // Handle toast notifications from Camera component
+          if (contentStateRef.current.openToast) {
+            contentStateRef.current.openToast(request.message, () => {});
           }
         }
       }

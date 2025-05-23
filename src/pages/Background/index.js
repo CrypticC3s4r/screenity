@@ -218,7 +218,7 @@ if (chrome.permissions) {
 // Add a debounce mechanism to prevent duplicate camera activation calls
 let lastCameraActivationTab = null;
 let lastCameraActivationTime = 0;
-const CAMERA_ACTIVATION_DEBOUNCE = 500; // 500ms debounce
+const CAMERA_ACTIVATION_DEBOUNCE = 200; // Reduced from 500ms to 200ms for faster tab switching
 
 const shouldActivateCamera = (tabId) => {
   const now = Date.now();
@@ -245,13 +245,15 @@ const onActivated = async (activeInfo) => {
 
   // Update active tab
   if (recording) {
-    // Deactivate camera in all other tabs
+    // Get camera info
     const { cameraActiveTab, cameraLabel } = await chrome.storage.local.get([
       "cameraActiveTab",
       "cameraLabel",
     ]);
 
-    if (cameraActiveTab && cameraActiveTab !== activeInfo.tabId) {
+    // Only deactivate camera in other tabs if we're switching to a different tab
+    // and if there's actually a camera active in another tab
+    if (cameraActiveTab && cameraActiveTab !== activeInfo.tabId && cameraLabel) {
       console.log(`Deactivating camera in tab: ${cameraActiveTab}`); // Debugging log
       sendMessageTab(cameraActiveTab, { type: "deactivate-camera" });
     }
@@ -266,6 +268,7 @@ const onActivated = async (activeInfo) => {
         sendMessageTab(activeInfo.tabId, {
           type: "activate-camera-by-label",
           cameraLabel: cameraLabel,
+          isTabSwitch: true // Flag to indicate this is a tab switch for faster activation
         });
       } else {
         console.log(`Skipping camera activation for tab ${activeInfo.tabId} - too soon since last activation`);
@@ -538,13 +541,31 @@ const stopRecording = async () => {
 
   chrome.storage.local.set({ recordingStartTime: 0 });
 
-  // Deactivate camera in all tabs
+  // Enhanced camera deactivation - clear storage first, then notify all tabs
+  chrome.storage.local.set({ 
+    cameraActiveTab: null,
+    cameraActive: false,
+    cameraLabel: null
+  });
+
+  // Deactivate camera in all tabs with better error handling
   chrome.tabs.query({}, (tabs) => {
+    console.log(`Deactivating camera in ${tabs.length} tabs after recording ended`);
     tabs.forEach((tab) => {
-      sendMessageTab(tab.id, { type: "deactivate-camera" });
+      try {
+        // Send deactivate message to content script with force flag
+        sendMessageTab(tab.id, { type: "deactivate-camera", force: true });
+        
+        // Also send message to camera component directly with force flag
+        sendMessageTab(tab.id, { type: "popup-closed", force: true });
+        
+        // Send recording-ended message to ensure UI updates
+        sendMessageTab(tab.id, { type: "recording-ended" });
+      } catch (error) {
+        console.log(`Failed to deactivate camera in tab ${tab.id}:`, error);
+      }
     });
   });
-  chrome.storage.local.set({ cameraActiveTab: null });
 
   if (duration > maxDuration) {
     // Close the sandbox tab, open a new one with fallback editor
