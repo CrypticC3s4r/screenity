@@ -24,6 +24,14 @@ Made by [Alyssa X](https://alyssax.com)
 - [Creating a development version](#creating-a-development-version)
   - [Enabling Save to Google Drive](#enabling-save-to-google-drive)
 - [Acknowledgements](#acknowledgements)
+- [Camera Management Architecture](#camera-management-architecture)
+  - [Overview](#overview)
+  - [Key Components](#key-components)
+  - [Message Types](#message-types)
+  - [Message Handler Registry (Dispatcher)](#message-handler-registry-dispatcher)
+  - [Message Flow](#message-flow)
+  - [Best Practices](#best-practices)
+  - [How to Extend](#how-to-extend)
 
 ## Features
 
@@ -38,7 +46,7 @@ Made by [Alyssa X](https://alyssax.com)
 ⏱️ Set up alarms to automatically stop your recording<br>
 💾 Export as mp4, gif, and webm, or save the video directly to Google Drive to share a link<br>
 ⚙️ Set a countdown, hide parts of the UI, or move it anywhere<br>
-🔒 Only you can see your videos, we don’t collect any of your data. You can even go offline!<br>
+🔒 Only you can see your videos, we don't collect any of your data. You can even go offline!<br>
 💙 No limits, make as many videos as you want, for as long as you want<br> …and much more - all for free & no sign in needed!
 
 ## Self-hosting Screenity
@@ -88,3 +96,48 @@ You can create it accessing [Google Cloud Console](https://console.cloud.google.
 If you need any help, or want to become a Screenity expert, you can browse articles and guides in the [help center](https://help.screenity.io). You can also submit any feedback or ideas in this [form](https://tally.so/r/3ElpXq), or contact through [this page](https://help.screenity.io/contact)
 
 Feel free to reach out to me through email at hi@alyssax.com or [on Twitter](https://twitter.com/alyssaxuu) if you have any questions or feedback! Hope you find this useful 💜
+
+## Camera Management Architecture
+
+## Overview
+The camera management system in this extension is designed for maintainability, testability, and adherence to Clean Code and SOLID principles. It is composed of modular components and clear message flows between the popup, background script, and content script (bubble).
+
+## Key Components
+
+### CameraController
+- Encapsulates all camera logic (start, stop, switch device) in a single class.
+- Handles errors and logs actions consistently.
+- Used by the bubble/content script to manage the camera stream.
+
+### CameraStateStorage
+- Provides `getCameraState` and `setCameraState` functions for reading and writing camera state to `chrome.storage.local`.
+- Centralizes storage logic for easy future changes.
+
+### Message Types
+- All message types are defined as constants in `messageTypes.js`.
+- This avoids typos and makes message handling robust and easy to refactor.
+
+### Message Handler Registry (Dispatcher)
+- Both the background script and content script use a handler registry to map message types to handler functions.
+- This makes it easy to add or change message handling logic without modifying the main listener.
+
+## Message Flow
+1. **User selects camera in popup**
+2. **Popup sends a message (e.g., SWITCH_CAMERA) to the background script**
+3. **Background script relays the message to the active tab (bubble/content script)**
+4. **Content script receives the message and uses CameraController to update the camera**
+
+## Best Practices
+- **Single Responsibility:** Each module/class has one clear responsibility.
+- **Open/Closed Principle:** Message handling and camera logic are open for extension, closed for modification.
+- **Centralized Error Handling:** All camera logic errors are logged and handled in one place.
+- **Testability:** CameraController and CameraStateStorage are designed to be easily testable.
+
+## How to Extend
+- Add new message types to `messageTypes.js`.
+- Add new handlers to the handler registry in the background or content script.
+- Add new camera features by extending CameraController.
+
+---
+
+For more details, see the `CAMERA_ARCHITECTURE.md` and `RefactoringPlan.md` files.

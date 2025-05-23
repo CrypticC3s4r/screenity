@@ -603,15 +603,40 @@ const ContentState = (props) => {
     chrome.storage.local.set({ askForPermissions: false });
   });
 
+  // Add a utility function to safely send chrome messages
+  const safeChromeMessage = useCallback((message, callback = null) => {
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        if (callback) {
+          chrome.runtime.sendMessage(message, callback);
+        } else {
+          chrome.runtime.sendMessage(message);
+        }
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, skipping message:", message.type);
+    }
+  }, []);
+
+  // Add a utility function to safely access chrome storage
+  const safeChromeStorage = useCallback((operation, data = null, callback = null) => {
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        if (operation === 'set' && data) {
+          chrome.storage.local.set(data, callback);
+        } else if (operation === 'get' && data) {
+          chrome.storage.local.get(data, callback);
+        }
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, skipping storage operation");
+    }
+  }, []);
+
   useEffect(() => {
     const handleMessage = (event) => {
-      if (event.data.type === "screenity-permissions") {
+      if (event.data.type === "device-permissions") {
         handleDevicePermissions(event.data);
-      } else if (event.data.type === "screenity-permissions-loaded") {
-        setContentState((prevContentState) => ({
-          ...prevContentState,
-          permissionsLoaded: true,
-        }));
       }
     };
 
@@ -623,9 +648,16 @@ const ContentState = (props) => {
   }, []);
 
   useEffect(() => {
-    // Listen for device changes
+    // Single device change listener with proper error handling
     const handleDeviceChange = async () => {
       try {
+        // Check if extension context is still valid
+        if (!chrome.runtime || !chrome.runtime.id) {
+          console.log("Extension context invalidated, removing device change listener");
+          navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
+          return;
+        }
+
         const devices = await navigator.mediaDevices.enumerateDevices();
 
         // Filter devices by type
@@ -650,8 +682,8 @@ const ContentState = (props) => {
           videoInput: videoInput,
         }));
 
-        // Save to storage
-        chrome.storage.local.set({
+        // Save to storage safely
+        safeChromeStorage('set', {
           audioInput: audioInput,
           videoInput: videoInput,
         });
@@ -666,7 +698,7 @@ const ContentState = (props) => {
               defaultAudioInput: audioInput.length > 0 ? audioInput[0].deviceId : "none",
               micActive: available,
             }));
-            chrome.storage.local.set({
+            safeChromeStorage('set', {
               defaultAudioInput: audioInput.length > 0 ? audioInput[0].deviceId : "none",
               micActive: available,
             });
@@ -682,7 +714,7 @@ const ContentState = (props) => {
               defaultVideoInput: videoInput.length > 0 ? videoInput[0].deviceId : "none",
               cameraActive: available,
             }));
-            chrome.storage.local.set({
+            safeChromeStorage('set', {
               defaultVideoInput: videoInput.length > 0 ? videoInput[0].deviceId : "none",
               cameraActive: available,
             });
@@ -690,6 +722,10 @@ const ContentState = (props) => {
         }
       } catch (err) {
         console.error("Error during device change detection:", err);
+        // If it's an extension context error, remove the listener
+        if (err.message && err.message.includes("Extension context invalidated")) {
+          navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
+        }
       }
     };
 
@@ -702,75 +738,7 @@ const ContentState = (props) => {
         handleDeviceChange
       );
     };
-  }, [checkDeviceAvailability]);
-
-  useEffect(() => {
-    const handleDeviceChange = async () => {
-      try {
-        // Request permission to get device labels
-        await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
-        
-        // Get updated device list
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const audioInput = devices.filter((device) => device.kind === "audioinput");
-        const videoInput = devices.filter((device) => device.kind === "videoinput");
-        
-        // Update device lists in state
-        setContentState((prevContentState) => ({
-          ...prevContentState,
-          audioInput,
-          videoInput,
-        }));
-        
-        // If camera is active, check if selected device still exists
-        if (contentStateRef.current.cameraActive && contentStateRef.current.defaultVideoInput !== "none") {
-          const videoDeviceStillExists = videoInput.some(device => device.deviceId === contentStateRef.current.defaultVideoInput);
-          
-          if (!videoDeviceStillExists) {
-            // Try to find the device by label instead of deviceId
-            const { cameraLabel } = await chrome.storage.local.get(['cameraLabel']);
-            if (cameraLabel) {
-              const matchedDevice = videoInput.find(device => device.label === cameraLabel);
-              if (matchedDevice) {
-                const available = await checkDeviceAvailability('video', matchedDevice.deviceId);
-                setContentState((prevContentState) => ({
-                  ...prevContentState,
-                  defaultVideoInput: matchedDevice.deviceId,
-                  cameraActive: available,
-                }));
-                chrome.storage.local.set({
-                  defaultVideoInput: matchedDevice.deviceId,
-                  cameraActive: available,
-                });
-                return;
-              }
-            }
-            
-            // Fall back to first available device if no match by label
-            const available = videoInput.length > 0 ? await checkDeviceAvailability('video', videoInput[0].deviceId) : false;
-            setContentState((prevContentState) => ({
-              ...prevContentState,
-              defaultVideoInput: videoInput.length > 0 ? videoInput[0].deviceId : "none",
-              cameraActive: available,
-            }));
-            chrome.storage.local.set({
-              defaultVideoInput: videoInput.length > 0 ? videoInput[0].deviceId : "none",
-              cameraActive: available,
-            });
-          }
-        }
-      } catch (err) {
-        console.error("Error during device change detection:", err);
-      }
-    };
-
-    navigator.mediaDevices.addEventListener("devicechange", handleDeviceChange);
-
-    // Cleanup listener
-    return () => {
-      navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
-    };
-  }, [checkDeviceAvailability]);
+  }, [checkDeviceAvailability, safeChromeStorage]);
 
   const toggleDeviceWithCheck = useCallback(async (deviceType, isActive, deviceId) => {
     if (isActive) {
@@ -792,9 +760,9 @@ const ContentState = (props) => {
         ...prevContentState,
         micActive: isActive,
       }));
-      chrome.storage.local.set({ micActive: isActive });
+      safeChromeStorage('set', { micActive: isActive });
       
-      chrome.runtime.sendMessage({
+      safeChromeMessage({
         type: "set-mic-active-tab",
         active: isActive,
         defaultAudioInput: deviceId || contentStateRef.current.defaultAudioInput,
@@ -804,9 +772,9 @@ const ContentState = (props) => {
         ...prevContentState,
         cameraActive: isActive,
       }));
-      chrome.storage.local.set({ cameraActive: isActive });
+      safeChromeStorage('set', { cameraActive: isActive });
       
-      chrome.runtime.sendMessage({
+      safeChromeMessage({
         type: "set-camera-active-tab",
         active: isActive,
         defaultVideoInput: deviceId || contentStateRef.current.defaultVideoInput,
@@ -814,7 +782,7 @@ const ContentState = (props) => {
     }
     
     return true;
-  }, [checkDeviceAvailability]);
+  }, [checkDeviceAvailability, safeChromeStorage, safeChromeMessage]);
 
   const toggleDeviceActive = useCallback(async (deviceType, isActive, deviceId) => {
     if (deviceType === 'video') {
@@ -1116,6 +1084,17 @@ const ContentState = (props) => {
 
   const onMessage = useCallback(
     (request, sender, sendResponse) => {
+      // Check if extension context is still valid
+      try {
+        if (!chrome.runtime || !chrome.runtime.id) {
+          console.log("Extension context invalidated, ignoring message");
+          return;
+        }
+      } catch (error) {
+        console.log("Extension context invalidated during message handling");
+        return;
+      }
+
       if (request.type === "time") {
         chrome.storage.local.get(["recording"], (result) => {
           if (result.recording) {
@@ -1197,13 +1176,13 @@ const ContentState = (props) => {
           dismissRecordingShortcut: cancelRecordingCommand.shortcut,
         }));
       } else if (request.type === "cancel-recording") {
-        contentState.dismissRecording();
+        contentStateRef.current.dismissRecording();
       } else if (request.type === "pause-recording") {
         // Toggle pause / resume
         if (contentStateRef.current.paused) {
-          contentState.resumeRecording();
+          contentStateRef.current.resumeRecording();
         } else {
-          contentState.pauseRecording();
+          contentStateRef.current.pauseRecording();
         }
       } else if (request.type === "set-surface") {
         setContentState((prevContentState) => ({
@@ -1269,26 +1248,88 @@ const ContentState = (props) => {
         );
       } else if (request.type === "recording-check") {
         if (!request.force) {
-          if (!contentStateRef.showExtension && !contentStateRef.recording) {
+          if (!contentStateRef.current.showExtension && !contentStateRef.current.recording) {
             updateFromStorage(true, sender.id);
           }
         } else if (request.force) {
+          // When force is true, we're switching back to a recording tab
+          // Make sure to show the extension but NOT the popup (since we're recording)
           setContentState((prevContentState) => ({
             ...prevContentState,
             showExtension: true,
+            showPopup: false, // Don't show popup during recording
             recording: true,
           }));
-          //checkRecording(sender.tab.id);
+          
+          // Update from storage to get the latest camera and recording state
           updateFromStorage(false, sender.id);
+          
+          // Note: Camera activation is handled by the background script when switching tabs
+          // No need to duplicate the activation call here
         }
       } else if (request.type === "stop-pending") {
         setContentState((prevContentState) => ({
           ...prevContentState,
           pendingRecording: false,
         }));
+      } else if (request.type === "deactivate-camera") {
+        // Only deactivate camera if we're not recording
+        // During recording, camera state should be managed by the background script
+        if (!contentStateRef.current.recording && !contentStateRef.current.pendingRecording) {
+          setContentState((prevContentState) => ({
+            ...prevContentState,
+            cameraActive: false,
+          }));
+          try {
+            if (chrome.runtime && chrome.runtime.id) {
+              chrome.storage.local.set({ cameraActive: false });
+              
+              // Send message to camera component to stop stream
+              chrome.runtime.sendMessage({
+                type: "set-camera-active-tab",
+                active: false
+              });
+            }
+          } catch (error) {
+            console.log("Extension context invalidated during camera deactivation");
+          }
+        } else {
+          console.log("Ignoring camera deactivation during recording - background script handles camera coordination");
+        }
+      } else if (request.type === "popup-closed") {
+        // Handle popup close - stop camera and mic if not recording
+        if (!contentStateRef.current.recording && !contentStateRef.current.pendingRecording) {
+          setContentState((prevContentState) => ({
+            ...prevContentState,
+            cameraActive: false,
+            micActive: false,
+          }));
+          
+          try {
+            if (chrome.runtime && chrome.runtime.id) {
+              chrome.storage.local.set({ 
+                cameraActive: false,
+                micActive: false 
+              });
+              
+              // Notify background script to clean up camera and mic
+              chrome.runtime.sendMessage({
+                type: "set-camera-active-tab",
+                active: false
+              });
+              chrome.runtime.sendMessage({
+                type: "set-mic-active-tab",
+                active: false,
+                defaultAudioInput: contentStateRef.current.defaultAudioInput,
+              });
+            }
+          } catch (error) {
+            console.log("Extension context invalidated during popup close handling");
+          }
+        }
       }
     },
-    [contentStateRef.current, contentState]
+    [] // Remove contentState dependency to prevent constant recreation
   );
 
   useEffect(() => {
@@ -1370,14 +1411,48 @@ const ContentState = (props) => {
     }
   }, [contentState.pushToTalk]);
 
-  // Event handler
+  // Event handler with proper extension context validation
   useEffect(() => {
-    chrome.runtime.onMessage.addListener(onMessage);
+    const handleMessage = (request, sender, sendResponse) => {
+      // Check if extension context is still valid
+      try {
+        if (!chrome.runtime || !chrome.runtime.id) {
+          console.log("Extension context invalidated, removing message listener");
+          chrome.runtime.onMessage.removeListener(handleMessage);
+          return;
+        }
+      } catch (error) {
+        console.log("Extension context invalidated during message listener check");
+        return;
+      }
+      
+      // Call the actual message handler
+      try {
+        onMessage(request, sender, sendResponse);
+      } catch (error) {
+        console.error("Error in message handler:", error);
+        // Don't re-throw to prevent uncaught exceptions
+      }
+    };
+
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        chrome.runtime.onMessage.addListener(handleMessage);
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, cannot add message listener");
+    }
 
     return () => {
-      chrome.runtime.onMessage.removeListener(onMessage);
+      try {
+        if (chrome.runtime && chrome.runtime.id) {
+          chrome.runtime.onMessage.removeListener(handleMessage);
+        }
+      } catch (error) {
+        console.log("Extension context invalidated during cleanup");
+      }
     };
-  }, []);
+  }, [onMessage]); // Now properly depend on onMessage
 
   useEffect(() => {
     if (contentState.backgroundEffectsActive) {
@@ -1597,7 +1672,10 @@ const ContentState = (props) => {
               ? result.cameraFlipped
               : prevContentState.cameraFlipped,
           cameraActive:
-            result.cameraActive !== undefined && result.cameraActive !== null
+            // During recording, camera should be active if a camera is available
+            result.recording && result.defaultVideoInput && result.defaultVideoInput !== "none"
+              ? true
+              : result.cameraActive !== undefined && result.cameraActive !== null
               ? result.cameraActive
               : prevContentState.cameraActive,
           micActive:

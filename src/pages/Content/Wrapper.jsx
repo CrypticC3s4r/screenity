@@ -138,21 +138,29 @@ const Wrapper = () => {
                   left: 0,
                 }}
                 onClick={() => {
-                  if (
-                    window.location.href.indexOf(
-                      chrome.runtime.getURL("setup.html")
-                    ) === -1 &&
-                    window.location.href.indexOf(
-                      chrome.runtime.getURL("playground.html")
-                    ) === -1 &&
-                    !contentState.pendingRecording &&
-                    !contentState.customRegion
-                  ) {
-                    setContentState((prevContentState) => ({
-                      ...prevContentState,
-                      showExtension: false,
-                      showPopup: false,
-                    }));
+                  try {
+                    if (!chrome.runtime || !chrome.runtime.id) {
+                      console.log("Extension context invalidated, ignoring wrapper click");
+                      return;
+                    }
+                    if (
+                      window.location.href.indexOf(
+                        chrome.runtime.getURL("setup.html")
+                      ) === -1 &&
+                      window.location.href.indexOf(
+                        chrome.runtime.getURL("playground.html")
+                      ) === -1 &&
+                      !contentState.pendingRecording &&
+                      !contentState.customRegion
+                    ) {
+                      setContentState((prevContentState) => ({
+                        ...prevContentState,
+                        showExtension: false,
+                        showPopup: false,
+                      }));
+                    }
+                  } catch (error) {
+                    console.log("Error in wrapper onClick handler:", error);
                   }
                 }}
               ></div>

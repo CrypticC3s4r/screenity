@@ -17,6 +17,36 @@ const Camera = () => {
   const offScreenCanvasRef = useRef(null);
   const offScreenCanvasContextRef = useRef(null);
 
+  // Add a utility function to safely send chrome messages
+  const safeChromeMessage = useCallback((message, callback = null) => {
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        if (callback) {
+          chrome.runtime.sendMessage(message, callback);
+        } else {
+          chrome.runtime.sendMessage(message);
+        }
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, skipping message:", message.type);
+    }
+  }, []);
+
+  // Add a utility function to safely access chrome storage
+  const safeChromeStorage = useCallback((operation, data = null, callback = null) => {
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        if (operation === 'set' && data) {
+          chrome.storage.local.set(data, callback);
+        } else if (operation === 'get' && data) {
+          chrome.storage.local.get(data, callback);
+        }
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, skipping storage operation");
+    }
+  }, []);
+
   useEffect(() => {
     offScreenCanvasRef.current = document.createElement("canvas");
   }, []);
@@ -62,7 +92,7 @@ const Camera = () => {
       }
       
       // Notify background that camera is no longer active in this tab
-      chrome.runtime.sendMessage({
+      safeChromeMessage({
         type: "set-camera-active-tab",
         active: false
       });
@@ -77,7 +107,7 @@ const Camera = () => {
         resolve();
       }, 100);
     });
-  }, []);
+  }, [safeChromeMessage]);
 
   // Enhanced getCameraStream to handle various constraint formats
   const getCameraStream = useCallback(async (constraints = { video: true }) => {
@@ -124,7 +154,7 @@ const Camera = () => {
         if (videoTracks.length > 0) {
           const videoTrack = videoTracks[0];
           const settings = videoTrack.getSettings();
-          chrome.runtime.sendMessage({
+          safeChromeMessage({
             type: "set-camera-active-tab",
             active: true,
             defaultVideoInput: settings.deviceId,
@@ -145,7 +175,7 @@ const Camera = () => {
         }
       }
     }
-  }, [stopCameraStream]);
+  }, [stopCameraStream, safeChromeMessage]);
 
   // Function to activate camera by label (for cross-tab consistency)
   const activateCameraByLabel = useCallback(async (cameraLabel) => {
@@ -222,137 +252,246 @@ const Camera = () => {
     }
   };
 
-  // Enhance the message listener to handle all camera-related events
+  // Enhanced message listener with better error handling
   useEffect(() => {
     const handleMessage = async (request, sender, sendResponse) => {
-      if (request.type === "switch-camera") {
-        console.log("Received switch-camera request:", request);
+      // Check if extension context is still valid
+      if (!chrome.runtime || !chrome.runtime.id) {
+        console.log("Extension context invalidated, removing message listener");
+        try {
+          chrome.runtime.onMessage.removeListener(handleMessage);
+        } catch (error) {
+          console.log("Error removing message listener:", error);
+        }
+        return;
+      }
+      
+      console.log("Camera component received message:", request.type, request);
+      
+      try {
+        // Add a small delay to prevent race conditions
+        await new Promise(resolve => setTimeout(resolve, 10));
         
-        if (request.id === "none") {
-          console.log("Switch-camera request: none. Stopping camera stream.");
-          stopCameraStream();
-        } else {
-          console.log("Switch-camera request with deviceId:", request.id);
+        if (request.type === "switch-camera") {
+          console.log("Received switch-camera request:", request);
           
-          // Stop stream completely before starting a new one
-          await stopCameraStream();
-          
-          // Start the new camera with a short delay to ensure cleanup is complete
-          setTimeout(() => {
-            getCameraStream({
-              video: {
-                deviceId: {
-                  exact: request.id,
-                },
-              },
-            });
-          }, 300);
-        }
-      } else if (request.type === "activate-camera-by-label") {
-        console.log("Received activate-camera-by-label request:", request);
-        if (request.cameraLabel) {
-          activateCameraByLabel(request.cameraLabel);
-        }
-      } else if (request.type === "deactivate-camera") {
-        console.log("Received deactivate-camera request");
-        stopCameraStream();
-      } else if (request.type === "background-effects-active") {
-        setBackgroundEffects(true);
-      } else if (request.type === "background-effects-inactive") {
-        setBackgroundEffects(false);
-      } else if (request.type === "camera-only-update") {
-        setWidth("auto");
-        setHeight("100%");
-        recordingTypeRef.current = "camera";
-      } else if (request.type === "screen-update") {
-        // Needs to fit 100% width and height but considering aspect ratio
-        const video = videoRef.current;
-        if (video) {
-          const videoWidth = video.videoWidth;
-          const videoHeight = video.videoHeight;
-
-          if (videoWidth > videoHeight) {
-            setWidth("auto");
-            setHeight("100%");
+          if (request.id === "none") {
+            console.log("Switch-camera request: none. Stopping camera stream.");
+            await stopCameraStream();
           } else {
-            setWidth("100%");
-            setHeight("auto");
-          }
-        }
-        recordingTypeRef.current = "screen";
-      } else if (request.type === "toggle-pip") {
-        // If picture in picture is active, close it, otherwise open it
-        if (document.pictureInPictureElement) {
-          document.exitPictureInPicture();
-        } else if (videoRef.current) {
-          try {
-            videoRef.current.requestPictureInPicture().catch(() => {
-              // Cancel pip mode if it fails
-              setPipMode(false);
-              chrome.runtime.sendMessage({ type: "pip-ended" });
-            });
-          } catch (error) {
-            // Cancel pip mode if it fails
-            setPipMode(false);
-            chrome.runtime.sendMessage({ type: "pip-ended" });
-          }
-        }
-      } else if (request.type === "set-surface") {
-        if (request.surface === "monitor" && videoRef.current) {
-          try {
-            videoRef.current.requestPictureInPicture().catch(() => {
-              // Cancel pip mode if it fails
-              setPipMode(false);
-              chrome.runtime.sendMessage({ type: "pip-ended" });
-            });
-          } catch (error) {
-            // Cancel pip mode if it fails
-            setPipMode(false);
-            chrome.runtime.sendMessage({ type: "pip-ended" });
-          }
-        }
-      } else if (request.type === "camera-toggled-toolbar") {
-        console.log("Camera toggled from toolbar:", request);
-        if (request.active) {
-          await stopCameraStream();
-          setTimeout(() => {
-            getCameraStream({
-              video: {
-                deviceId: {
-                  exact: request.id,
+            console.log("Switch-camera request with deviceId:", request.id);
+            
+            // Stop stream completely before starting a new one
+            await stopCameraStream();
+            
+            // Start the new camera with a short delay to ensure cleanup is complete
+            setTimeout(() => {
+              getCameraStream({
+                video: {
+                  deviceId: {
+                    exact: request.id,
+                  },
                 },
-              },
-            });
-          }, 300);
-          setPipMode(false);
-        } else {
-          stopCameraStream();
+              });
+            }, 300);
+          }
+        } else if (request.type === "activate-camera-by-label") {
+          console.log("Received activate-camera-by-label request:", request);
+          if (request.cameraLabel) {
+            // Add a small delay to ensure component is ready and prevent race conditions
+            setTimeout(() => {
+              activateCameraByLabel(request.cameraLabel);
+            }, 100);
+          }
+        } else if (request.type === "deactivate-camera") {
+          console.log("Received deactivate-camera request");
+          await stopCameraStream();
+        } else if (request.type === "popup-closed") {
+          console.log("Received popup-closed request - stopping camera stream");
+          await stopCameraStream();
+        } else if (request.type === "background-effects-active") {
+          setBackgroundEffects(true);
+        } else if (request.type === "background-effects-inactive") {
+          setBackgroundEffects(false);
+        } else if (request.type === "set-background-effect") {
+          // Handle background effect changes
+        } else if (request.type === "camera-flip") {
+          // Handle camera flip
+        } else if (request.type === "capture-frame") {
+          if (typeof captureFrame === 'function') {
+            captureFrame();
+          }
+        } else if (request.type === "get-recording-type") {
+          if (typeof sendResponse === 'function') {
+            sendResponse({ recordingType: recordingTypeRef.current });
+          }
+        } else if (request.type === "camera-only-update") {
+          setWidth("auto");
+          setHeight("100%");
+          recordingTypeRef.current = "camera";
+        } else if (request.type === "screen-update") {
+          // Needs to fit 100% width and height but considering aspect ratio
+          const video = videoRef.current;
+          if (video && video.videoWidth && video.videoHeight) {
+            const videoWidth = video.videoWidth;
+            const videoHeight = video.videoHeight;
+
+            if (videoWidth > videoHeight) {
+              setWidth("auto");
+              setHeight("100%");
+            } else {
+              setWidth("100%");
+              setHeight("auto");
+            }
+          }
+          recordingTypeRef.current = "screen";
+        } else if (request.type === "toggle-pip") {
+          // If picture in picture is active, close it, otherwise open it
+          if (document.pictureInPictureElement) {
+            document.exitPictureInPicture().catch(console.error);
+          } else if (videoRef.current) {
+            try {
+              videoRef.current.requestPictureInPicture().catch(() => {
+                // Cancel pip mode if it fails
+                setPipMode(false);
+                safeChromeMessage({ type: "pip-ended" });
+              });
+            } catch (error) {
+              // Cancel pip mode if it fails
+              setPipMode(false);
+              safeChromeMessage({ type: "pip-ended" });
+            }
+          }
+        } else if (request.type === "set-surface") {
+          if (request.surface === "monitor" && videoRef.current) {
+            try {
+              videoRef.current.requestPictureInPicture().catch(() => {
+                // Cancel pip mode if it fails
+                setPipMode(false);
+                safeChromeMessage({ type: "pip-ended" });
+              });
+            } catch (error) {
+              // Cancel pip mode if it fails
+              setPipMode(false);
+              safeChromeMessage({ type: "pip-ended" });
+            }
+          }
+        } else if (request.type === "camera-toggled-toolbar") {
+          console.log("Camera toggled from toolbar:", request);
+          if (request.active) {
+            await stopCameraStream();
+            setTimeout(() => {
+              getCameraStream({
+                video: {
+                  deviceId: {
+                    exact: request.id,
+                  },
+                },
+              });
+            }, 300);
+            setPipMode(false);
+          } else {
+            stopCameraStream();
+          }
+        } else if (request.type === "camera-selection-changed") {
+          console.log("Camera selection changed in another tab:", request);
+          if (request.cameraLabel) {
+            // Add delay to prevent race conditions
+            setTimeout(() => {
+              activateCameraByLabel(request.cameraLabel);
+            }, 150);
+          }
         }
-      } else if (request.type === "camera-selection-changed") {
-        console.log("Camera selection changed in another tab:", request);
-        if (request.cameraLabel) {
-          activateCameraByLabel(request.cameraLabel);
+      } catch (error) {
+        console.error("Error handling camera message:", error);
+        // Don't re-throw the error to prevent uncaught exceptions
+        // Also check if it's a React/DOM related error and handle gracefully
+        if (error.message && error.message.includes('call is not a function')) {
+          console.log("Detected React/DOM function call error, component may be in invalid state");
+          // Try to recover by stopping any ongoing operations
+          try {
+            setIsCapturing(false);
+            if (streamRef.current) {
+              streamRef.current.getTracks().forEach(track => track.stop());
+              streamRef.current = null;
+            }
+          } catch (recoveryError) {
+            console.log("Error during recovery:", recoveryError);
+          }
         }
       }
     };
 
-    chrome.runtime.onMessage.addListener(handleMessage);
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        chrome.runtime.onMessage.addListener(handleMessage);
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, cannot add message listener");
+    }
+    
     return () => {
-      chrome.runtime.onMessage.removeListener(handleMessage);
+      try {
+        if (chrome.runtime && chrome.runtime.id) {
+          chrome.runtime.onMessage.removeListener(handleMessage);
+        }
+      } catch (error) {
+        console.log("Extension context invalidated during cleanup");
+      }
     };
-  }, [getCameraStream, stopCameraStream, activateCameraByLabel]);
+  }, [getCameraStream, stopCameraStream, activateCameraByLabel, safeChromeMessage]);
 
   // Check chrome local storage on component mount
   useEffect(() => {
     const initializeCamera = async () => {
       try {
-        const result = await chrome.storage.local.get(["defaultVideoInput", "cameraActive", "cameraLabel"]);
+        // Use direct chrome.storage.local.get with error handling for initialization
+        let result;
+        try {
+          if (chrome.runtime && chrome.runtime.id) {
+            result = await chrome.storage.local.get([
+              "defaultVideoInput", 
+              "cameraActive", 
+              "cameraLabel", 
+              "recording", 
+              "cameraActiveTab"
+            ]);
+          } else {
+            console.log("Extension context invalidated during initialization");
+            return;
+          }
+        } catch (error) {
+          console.log("Extension context invalidated during storage access");
+          return;
+        }
+        
         console.log("Initial storage state:", result);
         
         // Check if camera should be inactive (either explicitly inactive OR set to none)
         if (result.cameraActive === false || result.defaultVideoInput === "none") {
           console.log("Camera is inactive or set to none, stopping stream.");
           stopCameraStream();
+          return;
+        }
+
+        // Get current tab ID to check if this tab should have the camera
+        let currentTabId = null;
+        try {
+          if (chrome.runtime && chrome.runtime.id) {
+            const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+            if (tabs.length > 0) {
+              currentTabId = tabs[0].id;
+            }
+          }
+        } catch (error) {
+          console.log("Could not get current tab ID");
+        }
+
+        // During recording, if we have a camera label, always try to activate it
+        // The background script will handle deactivating cameras in other tabs
+        if (result.recording && result.cameraLabel && result.cameraActive !== false) {
+          console.log("Recording in progress and camera should be active, activating by label:", result.cameraLabel);
+          activateCameraByLabel(result.cameraLabel);
           return;
         }
 
@@ -385,7 +524,7 @@ const Camera = () => {
     initializeCamera();
     
     // Request stored camera on mount
-    chrome.runtime.sendMessage(
+    safeChromeMessage(
       { type: "get-stored-camera" },
       (response) => {
         if (response && response.cameraLabel) {
@@ -394,11 +533,18 @@ const Camera = () => {
         }
       }
     );
-  }, [getCameraStream, stopCameraStream, activateCameraByLabel]);
+  }, [getCameraStream, stopCameraStream, activateCameraByLabel, safeChromeMessage]);
 
   // Add storage change listener to react to external changes
   useEffect(() => {
     const handleStorageChange = (changes, area) => {
+      // Check if extension context is still valid
+      if (!chrome.runtime || !chrome.runtime.id) {
+        console.log("Extension context invalidated, removing storage listener");
+        chrome.storage.onChanged.removeListener(handleStorageChange);
+        return;
+      }
+      
       if (area === "local") {
         // Check if cameraActive property changed and has a newValue property
         if (changes.cameraActive && changes.cameraActive.hasOwnProperty("newValue")) {
@@ -407,27 +553,46 @@ const Camera = () => {
             stopCameraStream();
           } else if (changes.cameraActive.newValue === true) {
             // Attempt to turn on the camera if we know it should be on
-            chrome.storage.local.get(["defaultVideoInput", "cameraLabel"], (result) => {
-              if (result.cameraLabel) {
-                activateCameraByLabel(result.cameraLabel);
-              } else if (result.defaultVideoInput && result.defaultVideoInput !== "none") {
-                getCameraStream({
-                  video: {
-                    deviceId: {
-                      exact: result.defaultVideoInput,
-                    },
-                  },
+            try {
+              if (chrome.runtime && chrome.runtime.id) {
+                chrome.storage.local.get(["defaultVideoInput", "cameraLabel"], (result) => {
+                  if (result.cameraLabel) {
+                    activateCameraByLabel(result.cameraLabel);
+                  } else if (result.defaultVideoInput && result.defaultVideoInput !== "none") {
+                    getCameraStream({
+                      video: {
+                        deviceId: {
+                          exact: result.defaultVideoInput,
+                        },
+                      },
+                    });
+                  }
                 });
               }
-            });
+            } catch (error) {
+              console.log("Extension context invalidated during storage change handling");
+            }
           }
         }
       }
     };
 
-    chrome.storage.onChanged.addListener(handleStorageChange);
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        chrome.storage.onChanged.addListener(handleStorageChange);
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, cannot add storage listener");
+    }
+    
     return () => {
-      chrome.storage.onChanged.removeListener(handleStorageChange);
+      try {
+        if (chrome.runtime && chrome.runtime.id) {
+          chrome.storage.onChanged.removeListener(handleStorageChange);
+        }
+      } catch (error) {
+        console.log("Extension context invalidated during storage cleanup");
+      }
     };
   }, [getCameraStream, stopCameraStream, activateCameraByLabel]);
 
@@ -437,11 +602,11 @@ const Camera = () => {
     
     const handleEnterPip = () => {
       setPipMode(true);
-      chrome.runtime.sendMessage({ type: "pip-started" });
+      safeChromeMessage({ type: "pip-started" });
     };
     const handleLeavePip = () => {
       setPipMode(false);
-      chrome.runtime.sendMessage({ type: "pip-ended" });
+      safeChromeMessage({ type: "pip-ended" });
     };
 
     videoRef.current.addEventListener("enterpictureinpicture", handleEnterPip);
@@ -453,7 +618,7 @@ const Camera = () => {
         videoRef.current.removeEventListener("leavepictureinpicture", handleLeavePip);
       }
     };
-  }, []);
+  }, [safeChromeMessage]);
 
   // Cleanup on unmount
   useEffect(() => {

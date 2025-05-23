@@ -1,5 +1,3 @@
-version: '3'
-
 services:
   # Build the extension
   build:
@@ -26,6 +24,20 @@ services:
       "
 
   # Run the development server
+  start:
+    build: .
+    mem_limit: 4g
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    ports:
+      - "8000:8000"  # Port for development server
+    environment:
+      - NPM_CONFIG_LOGLEVEL=verbose
+      - NODE_OPTIONS=--max-old-space-size=4096
+    command: npm start
+
+  # Run the development server using `npm run dev`
   dev:
     build: .
     mem_limit: 4g
@@ -37,25 +49,18 @@ services:
     environment:
       - NPM_CONFIG_LOGLEVEL=verbose
       - NODE_OPTIONS=--max-old-space-size=4096
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-    command: npm start
-    
+    command: npm run dev
+
   # Create a service to help with testing
   test:
     build: .
+    mem_limit: 4g
     volumes:
       - ./:/app
       - /app/node_modules
     environment:
       - NPM_CONFIG_LOGLEVEL=verbose
       - NODE_OPTIONS=--max-old-space-size=4096
-    deploy:
-      resources:
-        limits:
-          memory: 4G
     command: npm test
 
 volumes:

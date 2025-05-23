@@ -215,6 +215,21 @@ if (chrome.permissions) {
   });
 };
 
+// Add a debounce mechanism to prevent duplicate camera activation calls
+let lastCameraActivationTab = null;
+let lastCameraActivationTime = 0;
+const CAMERA_ACTIVATION_DEBOUNCE = 500; // 500ms debounce
+
+const shouldActivateCamera = (tabId) => {
+  const now = Date.now();
+  if (lastCameraActivationTab === tabId && (now - lastCameraActivationTime) < CAMERA_ACTIVATION_DEBOUNCE) {
+    return false; // Skip activation, too soon since last activation for this tab
+  }
+  lastCameraActivationTab = tabId;
+  lastCameraActivationTime = now;
+  return true;
+};
+
 const onActivated = async (activeInfo) => {
   console.log("Tab activated:", activeInfo.tabId); // Debugging log
 
@@ -247,10 +262,14 @@ const onActivated = async (activeInfo) => {
     // Activate the camera in the current tab with the stored label
     if (cameraLabel) {
       console.log(`Activating camera in tab: ${activeInfo.tabId} with label: ${cameraLabel}`); // Debugging log
-      sendMessageTab(activeInfo.tabId, {
-        type: "activate-camera-by-label",
-        cameraLabel: cameraLabel,
-      });
+      if (shouldActivateCamera(activeInfo.tabId)) {
+        sendMessageTab(activeInfo.tabId, {
+          type: "activate-camera-by-label",
+          cameraLabel: cameraLabel,
+        });
+      } else {
+        console.log(`Skipping camera activation for tab ${activeInfo.tabId} - too soon since last activation`);
+      }
     } else {
       console.warn("No camera label found in storage. Camera will not be activated.");
     }
@@ -259,18 +278,6 @@ const onActivated = async (activeInfo) => {
     const { tabRecordedID } = await chrome.storage.local.get(["tabRecordedID"]);
     if (tabRecordedID && tabRecordedID != activeInfo.tabId) {
       sendMessageTab(activeInfo.tabId, { type: "hide-popup-recording" });
-      // Check if active tab is not backup.html + chrome-extension://
-    } else if (
-      !(
-        tab.url.includes("backup.html") &&
-        tab.url.includes("chrome-extension://")
-      )
-    ) {
-      setCameraActiveTab({
-        active: true, // Assuming the camera should be active for the new tab
-        label: "default-camera-label", // Replace with the actual camera label if available
-        tabId: activeInfo.tabId
-      });
     }
 
     // Check if region or customRegion is set
@@ -343,13 +350,20 @@ chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
       "cameraLabel"
     ]);
 
-    // If this tab should have camera active and it's different from currently active camera tab
-    if (cameraLabel && tabId !== cameraActiveTab) {
-      // Tell the tab to activate camera by label
-      sendMessageTab(tabId, { 
-        type: "activate-camera-by-label", 
-        cameraLabel: cameraLabel 
-      });
+    // Only activate camera if recording and this tab is supposed to be the active camera tab
+    // AND this is a page navigation (not just a tab switch)
+    // We can detect page navigation by checking if the URL changed
+    if (recording && cameraLabel && cameraActiveTab === tabId && changeInfo.url) {
+      // This is a page navigation within the active camera tab, reactivate camera
+      console.log(`Page navigated in active camera tab ${tabId}, reactivating camera`);
+      if (shouldActivateCamera(tabId)) {
+        sendMessageTab(tabId, { 
+          type: "activate-camera-by-label", 
+          cameraLabel: cameraLabel 
+        });
+      } else {
+        console.log(`Skipping camera activation for tab ${tabId} in onUpdated - too soon since last activation`);
+      }
     }
 
     if (!recording && !restarting) {
@@ -1892,7 +1906,7 @@ chrome.runtime.onConnect.addListener((port) => {
     console.log("Port Closed");
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0]) {
-        sendMessageTab(tab[0].id, { type: "deactivate-camera" });
+        sendMessageTab(tabs[0].id, { type: "deactivate-camera" });
         chrome.tabs.sendMessage(tabs[0].id, { type: "popup-closed" });
       }
     });

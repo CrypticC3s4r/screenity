@@ -20,6 +20,36 @@ const Dropdown = (props) => {
   const [deviceList, setDeviceList] = useState([]);
   const previousDeviceRef = useRef(null);
 
+  // Add a utility function to safely send chrome messages
+  const safeChromeMessage = useCallback((message, callback = null) => {
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        if (callback) {
+          chrome.runtime.sendMessage(message, callback);
+        } else {
+          chrome.runtime.sendMessage(message);
+        }
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, skipping message:", message.type);
+    }
+  }, []);
+
+  // Add a utility function to safely access chrome storage
+  const safeChromeStorage = useCallback((operation, data = null, callback = null) => {
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        if (operation === 'set' && data) {
+          chrome.storage.local.set(data, callback);
+        } else if (operation === 'get' && data) {
+          chrome.storage.local.get(data, callback);
+        }
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, skipping storage operation");
+    }
+  }, []);
+
   const updateItems = () => {
     if (props.type === "camera") {
       if (
@@ -211,7 +241,7 @@ const Dropdown = (props) => {
           ...prevContentState,
           cameraActive: false,
         }));
-        chrome.storage.local.set({
+        safeChromeStorage('set', {
           cameraActive: false,
         });
         setLabel(chrome.i18n.getMessage("noCameraDropdownLabel"));
@@ -225,11 +255,11 @@ const Dropdown = (props) => {
           defaultVideoInput: newValue,
           cameraActive: true,
         }));
-        chrome.storage.local.set({
+        safeChromeStorage('set', {
           defaultVideoInput: newValue,
           cameraActive: true,
         });
-        chrome.runtime.sendMessage({
+        safeChromeMessage({
           type: "switch-camera",
           id: newValue,
           label: selectedDevice?.label  // Send the camera label for cross-tab identification
@@ -242,7 +272,7 @@ const Dropdown = (props) => {
           ...prevContentState,
           micActive: false,
         }));
-        chrome.storage.local.set({
+        safeChromeStorage('set', {
           micActive: false,
         });
         setLabel(chrome.i18n.getMessage("noMicrophoneDropdownLabel"));
@@ -253,7 +283,7 @@ const Dropdown = (props) => {
           defaultAudioInput: newValue,
           micActive: true,
         }));
-        chrome.storage.local.set({
+        safeChromeStorage('set', {
           defaultAudioInput: newValue,
           micActive: true,
           userSelectedAudioDevice: true  // Mark this as a user selection
@@ -265,7 +295,7 @@ const Dropdown = (props) => {
         );
         
         // Notify waveform about device change using Chrome messaging
-        chrome.runtime.sendMessage({
+        safeChromeMessage({
           type: 'microphone-changed',
           deviceId: newValue,
           timestamp: Date.now() // Add timestamp to ensure the message is treated as new
@@ -275,94 +305,117 @@ const Dropdown = (props) => {
   };
 
   const toggleActive = (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setOpen(false);
-    if (props.type === "camera") {
-      if (contentState.cameraActive) {
-        setContentState((prevContentState) => ({
-          ...prevContentState,
-          cameraActive: false,
-        }));
-        chrome.storage.local.set({
-          cameraActive: false,
-        });
-        setLabel(chrome.i18n.getMessage("noCameraDropdownLabel"));
-      } else {
-        refreshDeviceList().then(() => {
-          if (contentState.videoInput.length > 0) {
-            const deviceToUse = previousDeviceRef.current &&
-              contentState.videoInput.some(d => d.deviceId === previousDeviceRef.current)
-              ? previousDeviceRef.current
-              : contentState.videoInput[0]?.deviceId;
-            
-            const selectedDevice = contentState.videoInput.find(
-              device => device.deviceId === deviceToUse
-            );
-
-            setContentState(prevState => ({
-              ...prevState,
-              cameraActive: true,
-              defaultVideoInput: deviceToUse
-            }));
-            chrome.storage.local.set({
-              cameraActive: true,
-              defaultVideoInput: deviceToUse
-            });
-            
-            // Send the device label for cross-tab identification
-            chrome.runtime.sendMessage({
-              type: "switch-camera",
-              id: deviceToUse,
-              label: selectedDevice?.label
-            });
-            
-            setLabel(selectedDevice?.label || "Camera");
-          }
-        });
+    try {
+      // Check if extension context is still valid
+      if (!chrome.runtime || !chrome.runtime.id) {
+        console.log("Extension context invalidated, ignoring toggle action");
+        return;
       }
-    } else {
-      if (contentState.micActive) {
-        setContentState((prevContentState) => ({
-          ...prevContentState,
-          micActive: false,
-        }));
-        chrome.storage.local.set({
-          micActive: false,
-        });
-        setLabel(chrome.i18n.getMessage("noMicrophoneDropdownLabel"));
-      } else {
-        refreshDeviceList().then(() => {
-          if (contentState.audioInput.length > 0) {
-            const deviceToUse = previousDeviceRef.current &&
-              contentState.audioInput.some(d => d.deviceId === previousDeviceRef.current)
-              ? previousDeviceRef.current
-              : contentState.audioInput[0].deviceId;
+      
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(false);
+      
+      if (props.type === "camera") {
+        if (contentState.cameraActive) {
+          setContentState((prevContentState) => ({
+            ...prevContentState,
+            cameraActive: false,
+          }));
+          safeChromeStorage('set', {
+            cameraActive: false,
+          });
+          setLabel(chrome.i18n.getMessage("noCameraDropdownLabel"));
+        } else {
+          refreshDeviceList().then(() => {
+            if (contentState.videoInput.length > 0) {
+              const deviceToUse = previousDeviceRef.current &&
+                contentState.videoInput.some(d => d.deviceId === previousDeviceRef.current)
+                ? previousDeviceRef.current
+                : contentState.videoInput[0]?.deviceId;
+              
+              const selectedDevice = contentState.videoInput.find(
+                device => device.deviceId === deviceToUse
+              );
 
-            setContentState(prevState => ({
-              ...prevState,
-              micActive: true,
-              defaultAudioInput: deviceToUse
-            }));
-            chrome.storage.local.set({
-              micActive: true,
-              defaultAudioInput: deviceToUse,
-              userSelectedAudioDevice: true
-            });
-            setLabel(contentState.audioInput.find(d => d.deviceId === deviceToUse)?.label || "Microphone");
-            chrome.runtime.sendMessage({
-              type: 'microphone-changed',
-              deviceId: deviceToUse,
-              timestamp: Date.now()
-            });
-          }
-        });
+              setContentState(prevState => ({
+                ...prevState,
+                cameraActive: true,
+                defaultVideoInput: deviceToUse
+              }));
+              safeChromeStorage('set', {
+                cameraActive: true,
+                defaultVideoInput: deviceToUse
+              });
+              
+              // Send the device label for cross-tab identification
+              safeChromeMessage({
+                type: "switch-camera",
+                id: deviceToUse,
+                label: selectedDevice?.label
+              });
+              
+              setLabel(selectedDevice?.label || "Camera");
+            }
+          }).catch(error => {
+            console.log("Error refreshing device list:", error);
+          });
+        }
+      } else {
+        if (contentState.micActive) {
+          setContentState((prevContentState) => ({
+            ...prevContentState,
+            micActive: false,
+          }));
+          safeChromeStorage('set', {
+            micActive: false,
+          });
+          setLabel(chrome.i18n.getMessage("noMicrophoneDropdownLabel"));
+        } else {
+          refreshDeviceList().then(() => {
+            if (contentState.audioInput.length > 0) {
+              const deviceToUse = previousDeviceRef.current &&
+                contentState.audioInput.some(d => d.deviceId === previousDeviceRef.current)
+                ? previousDeviceRef.current
+                : contentState.audioInput[0].deviceId;
+
+              setContentState(prevState => ({
+                ...prevState,
+                micActive: true,
+                defaultAudioInput: deviceToUse
+              }));
+              safeChromeStorage('set', {
+                micActive: true,
+                defaultAudioInput: deviceToUse,
+                userSelectedAudioDevice: true
+              });
+              setLabel(contentState.audioInput.find(d => d.deviceId === deviceToUse)?.label || "Microphone");
+              safeChromeMessage({
+                type: 'microphone-changed',
+                deviceId: deviceToUse,
+                timestamp: Date.now()
+              });
+            }
+          }).catch(error => {
+            console.log("Error refreshing device list:", error);
+          });
+        }
       }
+    } catch (error) {
+      console.log("Error in toggleActive function:", error);
+      // Don't re-throw to prevent uncaught exceptions
     }
   };
 
   useEffect(() => {
     const handleMessage = (request, sender, sendResponse) => {
+      // Check if extension context is still valid
+      if (!chrome.runtime || !chrome.runtime.id) {
+        console.log("Extension context invalidated, removing message listener");
+        chrome.runtime.onMessage.removeListener(handleMessage);
+        return;
+      }
+      
       if (request.type === "camera-selection-changed" && props.type === "camera") {
         refreshDeviceList().then(() => {
           // Find device by label
@@ -382,9 +435,22 @@ const Dropdown = (props) => {
       }
     };
     
-    chrome.runtime.onMessage.addListener(handleMessage);
+    try {
+      if (chrome.runtime && chrome.runtime.id) {
+        chrome.runtime.onMessage.addListener(handleMessage);
+      }
+    } catch (error) {
+      console.log("Extension context invalidated, cannot add message listener");
+    }
+    
     return () => {
-      chrome.runtime.onMessage.removeListener(handleMessage);
+      try {
+        if (chrome.runtime && chrome.runtime.id) {
+          chrome.runtime.onMessage.removeListener(handleMessage);
+        }
+      } catch (error) {
+        console.log("Extension context invalidated during cleanup");
+      }
     };
   }, [contentState.videoInput, refreshDeviceList]);
 
@@ -415,41 +481,85 @@ const Dropdown = (props) => {
         <Select.Icon
           className="SelectIconType"
           onClick={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            setOpen(false);
-            clickedIcon.current = true;
+            try {
+              if (!chrome.runtime || !chrome.runtime.id) {
+                console.log("Extension context invalidated, ignoring icon click");
+                return;
+              }
+              e.stopPropagation();
+              e.preventDefault();
+              setOpen(false);
+              clickedIcon.current = true;
+            } catch (error) {
+              console.log("Error in Select.Icon onClick handler:", error);
+            }
           }}
           onMouseDown={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            setOpen(false);
-            clickedIcon.current = true;
+            try {
+              if (!chrome.runtime || !chrome.runtime.id) {
+                console.log("Extension context invalidated, ignoring icon mousedown");
+                return;
+              }
+              e.stopPropagation();
+              e.preventDefault();
+              setOpen(false);
+              clickedIcon.current = true;
+            } catch (error) {
+              console.log("Error in Select.Icon onMouseDown handler:", error);
+            }
           }}
           onMouseUp={(e) => {
-            clickedIcon.current = false;
+            try {
+              clickedIcon.current = false;
+            } catch (error) {
+              console.log("Error in Select.Icon onMouseUp handler:", error);
+            }
           }}
         >
           <div
             className="SelectIconButton"
             onClick={(e) => {
-              e.stopPropagation();
-              setOpen(false);
-              toggleActive(e);
-              clickedIcon.current = true;
+              try {
+                if (!chrome.runtime || !chrome.runtime.id) {
+                  console.log("Extension context invalidated, ignoring click");
+                  return;
+                }
+                e.stopPropagation();
+                setOpen(false);
+                toggleActive(e);
+                clickedIcon.current = true;
+              } catch (error) {
+                console.log("Error in onClick handler:", error);
+              }
             }}
             onMouseDown={(e) => {
-              e.stopPropagation();
-              e.preventDefault();
-              setOpen(false);
-              clickedIcon.current = true;
+              try {
+                if (!chrome.runtime || !chrome.runtime.id) {
+                  console.log("Extension context invalidated, ignoring mousedown");
+                  return;
+                }
+                e.stopPropagation();
+                e.preventDefault();
+                setOpen(false);
+                clickedIcon.current = true;
+              } catch (error) {
+                console.log("Error in onMouseDown handler:", error);
+              }
             }}
             onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
+              try {
+                e.preventDefault();
+                e.stopPropagation();
+              } catch (error) {
+                console.log("Error in onContextMenu handler:", error);
+              }
             }}
             onMouseUp={(e) => {
-              clickedIcon.current = false;
+              try {
+                clickedIcon.current = false;
+              } catch (error) {
+                console.log("Error in onMouseUp handler:", error);
+              }
             }}
           >
             {props.type == "camera" && (
