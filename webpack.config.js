@@ -141,6 +141,12 @@ var options = {
       .map((extension) => "." + extension)
       .concat([".js", ".jsx", ".ts", ".tsx", ".css"]),
   },
+  watchOptions: {
+    // Enable polling for better file watching in Docker
+    poll: process.env.NODE_ENV === "development" ? 1000 : false,
+    aggregateTimeout: 300,
+    ignored: /node_modules/,
+  },
   plugins: [
     new CleanWebpackPlugin({ verbose: false }),
     new webpack.ProgressPlugin(),

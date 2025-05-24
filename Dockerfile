@@ -15,8 +15,8 @@ RUN npm install
 # Copy source code
 COPY . .
 
-# Build the extension for production
-RUN npm run build
+# Don't build in Dockerfile for dev - let docker-compose handle it
+# The dev container will build on startup with watch mode
 
-# Command for development mode
+# Command for development mode (can be overridden by docker-compose)
 CMD ["npm", "run", "dev"]

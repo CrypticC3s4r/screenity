@@ -31,7 +31,7 @@ services:
       - ./:/app
       - /app/node_modules
     ports:
-      - "8000:8000"  # Port for development server
+      - "3000:3000"  # Fixed port mapping to match dev server default
     environment:
       - NPM_CONFIG_LOGLEVEL=verbose
       - NODE_OPTIONS=--max-old-space-size=4096
@@ -45,11 +45,17 @@ services:
       - ./:/app
       - /app/node_modules
     ports:
-      - "8000:8000"  # Port for development server
+      - "3000:3000"  # Fixed port mapping to match dev server default
     environment:
       - NPM_CONFIG_LOGLEVEL=verbose
       - NODE_OPTIONS=--max-old-space-size=4096
+      - PORT=3000  # Explicitly set the port
+      - CHOKIDAR_USEPOLLING=true  # Enable polling for file watching in Docker
+      - WATCHPACK_POLLING=true    # Enable webpack polling
+      - NODE_ENV=development      # Ensure development mode
     command: npm run dev
+    stdin_open: true  # Keep container interactive
+    tty: true         # Allocate a pseudo-TTY
 
   # Create a service to help with testing
   test:
