@@ -14,8 +14,12 @@ const URL =
 const TranscriptionPanel = ({ isOpen, onClose }) => {
   const [contentState, setContentState] = useContext(ContentStateContext);
   const [transcription, setTranscription] = useState(null);
+  const [sop, setSop] = useState(null);
+  const [activeTab, setActiveTab] = useState("transcription");
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [isGeneratingSop, setIsGeneratingSop] = useState(false);
   const [error, setError] = useState(null);
+  const [sopError, setSopError] = useState(null);
   const [progress, setProgress] = useState(0);
   const transcriptionService = useRef(null);
 
@@ -53,6 +57,7 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
     setError(null);
     setProgress(0);
     setTranscription(null);
+    setSop(null); // Clear SOP when starting new transcription
 
     try {
       // First extract audio from video as MP3
@@ -133,6 +138,43 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
     }
   };
 
+  const handleGenerateSop = async () => {
+    if (!transcriptionService.current) {
+      setSopError("Please set your OpenAI API key in the settings first");
+      return;
+    }
+
+    if (!transcription) {
+      setSopError("No transcription available to generate SOP from");
+      return;
+    }
+
+    setIsGeneratingSop(true);
+    setSopError(null);
+
+    try {
+      const generatedSop = await transcriptionService.current.generateSOP(
+        transcription.text, 
+        transcription.language
+      );
+      
+      setSop({
+        content: generatedSop,
+        language: transcription.language,
+        isEdited: false
+      });
+      
+      // Switch to SOP tab after generation
+      setActiveTab("sop");
+      
+    } catch (err) {
+      console.error("SOP generation error:", err);
+      setSopError(err.message || "Failed to generate SOP");
+    } finally {
+      setIsGeneratingSop(false);
+    }
+  };
+
   const handleCopy = async () => {
     if (!transcription) return;
     
@@ -184,6 +226,57 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
     }
   };
 
+  const handleCopySop = async () => {
+    if (!sop) return;
+    
+    try {
+      // First try the modern clipboard API
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(sop.content);
+        console.log("SOP copied to clipboard");
+      } else {
+        // Fallback for chrome-extension:// contexts
+        const textArea = document.createElement("textarea");
+        textArea.value = sop.content;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        textArea.style.top = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        try {
+          document.execCommand('copy');
+          console.log("SOP copied to clipboard (fallback)");
+        } catch (err) {
+          console.error("Failed to copy SOP to clipboard:", err);
+        } finally {
+          document.body.removeChild(textArea);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to copy SOP to clipboard:", err);
+      // Try the fallback method
+      const textArea = document.createElement("textarea");
+      textArea.value = sop.content;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      
+      try {
+        document.execCommand('copy');
+        console.log("SOP copied to clipboard (fallback)");
+      } catch (fallbackErr) {
+        console.error("All SOP clipboard methods failed:", fallbackErr);
+      } finally {
+        document.body.removeChild(textArea);
+      }
+    }
+  };
+
   const handleDownload = () => {
     if (!transcription) return;
     
@@ -208,6 +301,38 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
     }
   };
 
+  const handleDownloadSop = () => {
+    if (!sop) return;
+    
+    try {
+      const element = document.createElement("a");
+      const file = new Blob([sop.content], { type: 'text/plain' });
+      element.href = URL.createObjectURL(file);
+      element.download = `${contentState.title || 'video'}-sop.txt`;
+      element.style.display = "none";
+      document.body.appendChild(element);
+      element.click();
+      
+      // Clean up after a short delay
+      setTimeout(() => {
+        document.body.removeChild(element);
+        URL.revokeObjectURL(element.href);
+      }, 100);
+      
+      console.log("SOP download initiated");
+    } catch (err) {
+      console.error("Failed to download SOP:", err);
+    }
+  };
+
+  const handleSopEdit = (newContent) => {
+    setSop(prev => ({
+      ...prev,
+      content: newContent,
+      isEdited: true
+    }));
+  };
+
   if (!isOpen) return null;
 
   return (
@@ -218,6 +343,25 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
           <ReactSVG src={URL + "editor/icons/close.svg"} />
         </button>
       </div>
+
+      {/* Tab Navigation */}
+      {(transcription || sop) && (
+        <div className={styles.tabNavigation}>
+          <button 
+            className={`${styles.tabButton} ${activeTab === "transcription" ? styles.active : ""}`}
+            onClick={() => setActiveTab("transcription")}
+          >
+            Transcription
+          </button>
+          <button 
+            className={`${styles.tabButton} ${activeTab === "sop" ? styles.active : ""}`}
+            onClick={() => setActiveTab("sop")}
+            disabled={!sop}
+          >
+            SOP
+          </button>
+        </div>
+      )}
 
       <div className={styles.content}>
         {!transcription && !isTranscribing && !error && (
@@ -268,7 +412,8 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
           </div>
         )}
 
-        {transcription && (
+        {/* Transcription Tab Content */}
+        {transcription && activeTab === "transcription" && (
           <div className={styles.result}>
             <div className={styles.resultHeader}>
               <div className={styles.resultInfo}>
@@ -296,6 +441,15 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
                 >
                   <ReactSVG src={URL + "editor/icons/refresh.svg"} />
                 </button>
+                <button 
+                  className={`${styles.actionButton} ${styles.generateSopButton}`}
+                  onClick={handleGenerateSop}
+                  disabled={isGeneratingSop}
+                  title="Generate SOP from transcription"
+                >
+                  <ReactSVG src={URL + "editor/icons/pencil.svg"} />
+                  {isGeneratingSop ? "Generating..." : "Generate SOP"}
+                </button>
               </div>
             </div>
             
@@ -309,6 +463,72 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
                   {line}
                 </div>
               ))}
+            </div>
+          </div>
+        )}
+
+        {/* SOP Generation Loading */}
+        {isGeneratingSop && (
+          <div className={styles.loading}>
+            <div className={styles.spinner}></div>
+            <div className={styles.loadingText}>Generating SOP...</div>
+          </div>
+        )}
+
+        {/* SOP Generation Error */}
+        {sopError && (
+          <div className={styles.error}>
+            <ReactSVG src={URL + "editor/icons/alert.svg"} />
+            <div className={styles.errorText}>{sopError}</div>
+            <button 
+              className={styles.retryButton}
+              onClick={handleGenerateSop}
+            >
+              Try Again
+            </button>
+          </div>
+        )}
+
+        {/* SOP Tab Content */}
+        {sop && activeTab === "sop" && (
+          <div className={styles.result}>
+            <div className={styles.resultHeader}>
+              <div className={styles.resultInfo}>
+                Language: {sop.language} {sop.isEdited && "(Edited)"}
+              </div>
+              <div className={styles.resultActions}>
+                <button 
+                  className={styles.actionButton}
+                  onClick={handleCopySop}
+                  title="Copy SOP to clipboard"
+                >
+                  <ReactSVG src={URL + "editor/icons/copy.svg"} />
+                </button>
+                <button 
+                  className={styles.actionButton}
+                  onClick={handleDownloadSop}
+                  title="Download SOP as text file"
+                >
+                  <ReactSVG src={URL + "editor/icons/download.svg"} />
+                </button>
+                <button 
+                  className={styles.actionButton}
+                  onClick={handleGenerateSop}
+                  disabled={isGeneratingSop}
+                  title="Regenerate SOP"
+                >
+                  <ReactSVG src={URL + "editor/icons/refresh.svg"} />
+                </button>
+              </div>
+            </div>
+            
+            <div className={styles.sopEditor}>
+              <textarea
+                className={styles.sopTextarea}
+                value={sop.content}
+                onChange={(e) => handleSopEdit(e.target.value)}
+                placeholder="Your SOP will appear here..."
+              />
             </div>
           </div>
         )}
