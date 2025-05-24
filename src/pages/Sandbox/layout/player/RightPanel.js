@@ -490,7 +490,7 @@ const RightPanel = ({ onToggleTranscription, isTranscriptionOpen }) => {
                 className={styles.button}
                 onClick={onToggleTranscription}
                 disabled={
-                  !contentState.mp4ready && !contentState.webm
+                  (!contentState.mp4ready && !contentState.webm) || contentState.isFfmpegRunning
                 }
               >
                 <div className={styles.buttonLeft}>
@@ -501,8 +501,10 @@ const RightPanel = ({ onToggleTranscription, isTranscriptionOpen }) => {
                     {isTranscriptionOpen ? "Hide Transcription" : "Transcribe Audio"}
                   </div>
                   <div className={styles.buttonDescription}>
-                    {!contentState.mp4ready && !contentState.webm
+                    {(!contentState.mp4ready && !contentState.webm)
                       ? "Video not ready"
+                      : contentState.isFfmpegRunning
+                      ? "Processing video..."
                       : isTranscriptionOpen
                       ? "Close transcription panel"
                       : "Generate text from video audio"}

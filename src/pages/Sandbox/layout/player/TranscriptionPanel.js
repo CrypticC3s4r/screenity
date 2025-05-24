@@ -133,24 +133,78 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
     }
   };
 
-  const handleCopy = () => {
-    if (transcription) {
-      navigator.clipboard.writeText(transcription.text).then(() => {
-        // Could add a toast notification here
+  const handleCopy = async () => {
+    if (!transcription) return;
+    
+    try {
+      // First try the modern clipboard API
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(transcription.text);
         console.log("Transcription copied to clipboard");
-      });
+      } else {
+        // Fallback for chrome-extension:// contexts
+        const textArea = document.createElement("textarea");
+        textArea.value = transcription.text;
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        textArea.style.top = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        try {
+          document.execCommand('copy');
+          console.log("Transcription copied to clipboard (fallback)");
+        } catch (err) {
+          console.error("Failed to copy to clipboard:", err);
+        } finally {
+          document.body.removeChild(textArea);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to copy to clipboard:", err);
+      // Try the fallback method
+      const textArea = document.createElement("textarea");
+      textArea.value = transcription.text;
+      textArea.style.position = "fixed";
+      textArea.style.left = "-999999px";
+      textArea.style.top = "-999999px";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      
+      try {
+        document.execCommand('copy');
+        console.log("Transcription copied to clipboard (fallback)");
+      } catch (fallbackErr) {
+        console.error("All clipboard methods failed:", fallbackErr);
+      } finally {
+        document.body.removeChild(textArea);
+      }
     }
   };
 
   const handleDownload = () => {
-    if (transcription) {
+    if (!transcription) return;
+    
+    try {
       const element = document.createElement("a");
       const file = new Blob([transcription.text], { type: 'text/plain' });
       element.href = URL.createObjectURL(file);
       element.download = `${contentState.title || 'video'}-transcription.txt`;
+      element.style.display = "none";
       document.body.appendChild(element);
       element.click();
-      document.body.removeChild(element);
+      
+      // Clean up after a short delay
+      setTimeout(() => {
+        document.body.removeChild(element);
+        URL.revokeObjectURL(element.href);
+      }, 100);
+      
+      console.log("Transcription download initiated");
+    } catch (err) {
+      console.error("Failed to download transcription:", err);
     }
   };
 
