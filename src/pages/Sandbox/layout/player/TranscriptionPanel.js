@@ -77,7 +77,7 @@ const TranscriptionPanel = ({ isOpen, onClose }) => {
       // Send message to sandbox to extract MP3 audio
       const audioBlob = await new Promise((resolve, reject) => {
         const handleMessage = (event) => {
-          if (event.data.type === "updated-blob") {
+          if (event.data.type === "audio-extracted") {
             window.removeEventListener("message", handleMessage);
             // Convert base64 back to blob
             const base64 = event.data.base64.split(",")[1];

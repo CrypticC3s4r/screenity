@@ -186,7 +186,7 @@ const Sandbox = () => {
         
         const blob = await getAudioMP3(ffmpegInstance.current, videoBlob);
         const base64 = await toBase64(blob);
-        sendMessage({ type: "updated-blob", base64: base64 });
+        sendMessage({ type: "audio-extracted", base64: base64 });
       } catch (error) {
         sendMessage({ type: "ffmpeg-error", error: JSON.stringify(error) });
       }
