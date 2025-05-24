@@ -9,6 +9,7 @@ import cutVideo from "./utils/cutVideo";
 import fetchFile from "./utils/fetchFile";
 import generateThumbstrips from "./utils/generateThumbstrips";
 import getAudio from "./utils/getAudio";
+import getAudioMP3 from "./utils/getAudioMP3";
 import getFrame from "./utils/getFrame";
 import hasAudio from "./utils/hasAudio";
 import muteVideo from "./utils/muteVideo";
@@ -177,6 +178,18 @@ const Sandbox = () => {
       } catch (error) {
         sendMessage({ type: "ffmpeg-error", error: JSON.stringify(error) });
       }
+    } else if (message.type === "get-audio-mp3") {
+      try {
+        // Convert base64 back to blob
+        const response = await fetch(message.base64);
+        const videoBlob = await response.blob();
+        
+        const blob = await getAudioMP3(ffmpegInstance.current, videoBlob);
+        const base64 = await toBase64(blob);
+        sendMessage({ type: "updated-blob", base64: base64 });
+      } catch (error) {
+        sendMessage({ type: "ffmpeg-error", error: JSON.stringify(error) });
+      }
     } else if (message.type === "get-frame") {
       try {
         const blob = await getFrame(
@@ -252,6 +265,7 @@ const Sandbox = () => {
     <div>
       <iframe
         ref={iframeRef}
+        id="sandbox"
         src="sandbox.html"
         allowFullScreen={true}
         style={{

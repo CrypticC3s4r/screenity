@@ -15,7 +15,7 @@ import AudioUI from "../editor/AudioUI";
 // Context
 import { ContentStateContext } from "../../context/ContentState"; // Import the ContentState context
 
-const RightPanel = () => {
+const RightPanel = ({ onToggleTranscription, isTranscriptionOpen }) => {
   const [contentState, setContentState] = useContext(ContentStateContext); // Access the ContentState context
   const [webmFallback, setWebmFallback] = useState(false);
   const contentStateRef = useRef(contentState);
@@ -479,6 +479,33 @@ const RightPanel = () => {
                       : contentState.mp4ready
                       ? chrome.i18n.getMessage("addAudioButtonDescription")
                       : chrome.i18n.getMessage("preparingLabel")}
+                  </div>
+                </div>
+                <div className={styles.buttonRight}>
+                  <ReactSVG src={URL + "editor/icons/right-arrow.svg"} />
+                </div>
+              </div>
+              <div
+                role="button"
+                className={styles.button}
+                onClick={onToggleTranscription}
+                disabled={
+                  !contentState.mp4ready && !contentState.webm
+                }
+              >
+                <div className={styles.buttonLeft}>
+                  <ReactSVG src={URL + "editor/icons/mic.svg"} />
+                </div>
+                <div className={styles.buttonMiddle}>
+                  <div className={styles.buttonTitle}>
+                    {isTranscriptionOpen ? "Hide Transcription" : "Transcribe Audio"}
+                  </div>
+                  <div className={styles.buttonDescription}>
+                    {!contentState.mp4ready && !contentState.webm
+                      ? "Video not ready"
+                      : isTranscriptionOpen
+                      ? "Close transcription panel"
+                      : "Generate text from video audio"}
                   </div>
                 </div>
                 <div className={styles.buttonRight}>

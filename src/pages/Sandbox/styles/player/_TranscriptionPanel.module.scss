@@ -1,0 +1,287 @@
+@use "../global/variables.scss" as *;
+
+.panel {
+  height: 100%;
+  width: 460px;
+  background-color: #fff;
+  border: 1px solid $color-border;
+  box-sizing: border-box;
+  overflow-y: auto;
+  z-index: 9999999;
+  display: flex;
+  flex-direction: column;
+}
+
+// Max width 900px
+@media (max-width: 900px) {
+  .panel {
+    width: 100% !important;
+    position: relative !important;
+    top: 0px;
+    left: 0px;
+    overflow: unset !important;
+  }
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 20px;
+  border-bottom: 1px solid $color-border;
+  background-color: #f8fafc;
+}
+
+.title {
+  font-family: $font-bold;
+  color: $color-text-primary;
+  font-size: 16px;
+}
+
+.closeButton {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  &:hover {
+    background-color: #e2e8f0;
+  }
+
+  svg {
+    width: 16px;
+    height: 16px;
+    color: $color-text-secondary;
+  }
+}
+
+.content {
+  flex: 1;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.initial {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 20px;
+  height: 100%;
+}
+
+.description {
+  font-family: $font-medium;
+  color: $color-text-secondary;
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+.transcribeButton {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 24px;
+  background-color: $color-primary;
+  color: white;
+  border: none;
+  border-radius: 8px;
+  font-family: $font-bold;
+  cursor: pointer;
+  transition: all 0.2s ease;
+
+  &:hover:not(:disabled) {
+    background-color: darken($color-primary, 10%);
+    transform: translateY(-1px);
+  }
+
+  &:disabled {
+    background-color: #94a3b8;
+    cursor: not-allowed;
+    transform: none;
+  }
+
+  svg {
+    width: 16px;
+    height: 16px;
+  }
+}
+
+.warning {
+  font-family: $font-medium;
+  color: #ef4444;
+  font-size: 14px;
+  text-align: center;
+}
+
+.loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  height: 100%;
+}
+
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #e2e8f0;
+  border-top: 4px solid $color-primary;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loadingText {
+  font-family: $font-medium;
+  color: $color-text-primary;
+  font-size: 16px;
+}
+
+.progressBar {
+  width: 200px;
+  height: 8px;
+  background-color: #e2e8f0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background-color: $color-primary;
+  transition: width 0.3s ease;
+}
+
+.progressText {
+  font-family: $font-medium;
+  color: $color-text-secondary;
+  font-size: 14px;
+}
+
+.error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 20px;
+  background-color: #fef2f2;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+
+  svg {
+    width: 32px;
+    height: 32px;
+    color: #ef4444;
+  }
+}
+
+.errorText {
+  font-family: $font-medium;
+  color: #dc2626;
+  text-align: center;
+  line-height: 1.5;
+}
+
+.retryButton {
+  padding: 8px 16px;
+  background-color: #ef4444;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-family: $font-medium;
+  cursor: pointer;
+  transition: background-color 0.2s ease;
+
+  &:hover {
+    background-color: #dc2626;
+  }
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  height: 100%;
+}
+
+.resultHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 12px;
+  border-bottom: 1px solid $color-border;
+}
+
+.resultInfo {
+  font-family: $font-medium;
+  color: $color-text-secondary;
+  font-size: 14px;
+}
+
+.resultActions {
+  display: flex;
+  gap: 8px;
+}
+
+.actionButton {
+  background: none;
+  border: 1px solid $color-border;
+  border-radius: 6px;
+  padding: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s ease;
+
+  &:hover {
+    background-color: #f1f5f9;
+    border-color: $color-primary;
+  }
+
+  svg {
+    width: 14px;
+    height: 14px;
+    color: $color-text-secondary;
+  }
+}
+
+.transcriptionText {
+  flex: 1;
+  background-color: #f8fafc;
+  border: 1px solid $color-border;
+  border-radius: 8px;
+  padding: 16px;
+  overflow-y: auto;
+  font-family: $font-medium;
+  color: $color-text-primary;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.transcriptionLine {
+  margin-bottom: 8px;
+
+  &:last-child {
+    margin-bottom: 0;
+  }
+
+  // Style timestamp lines that start with [
+  &[data-timestamp="true"] {
+    font-family: $font-bold;
+    color: $color-primary;
+    margin-top: 16px;
+    margin-bottom: 8px;
+  }
+} 

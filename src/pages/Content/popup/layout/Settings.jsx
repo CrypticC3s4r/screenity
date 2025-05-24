@@ -5,6 +5,7 @@ import { DropdownIcon } from "../../images/popup/images";
 // Components
 import Switch from "../components/Switch";
 import TimeSetter from "../components/TimeSetter";
+import ApiKeyInput from "../components/ApiKeyInput";
 
 // Context
 import { contentStateContext } from "../../context/ContentState";
@@ -86,6 +87,7 @@ const Settings = () => {
           value="zoomEnabled"
           experimental={true}
         />
+        <ApiKeyInput />
       </Collapsible.Content>
     </Collapsible.Root>
   );
