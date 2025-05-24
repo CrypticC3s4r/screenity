@@ -6,6 +6,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { MoreIconPopup } from "../../toolbar/components/SVG";
 
 import TooltipWrap from "../components/TooltipWrap";
+import ApiKeyDialog from "../components/ApiKeyDialog";
 
 import { CheckWhiteIcon, DropdownGroup } from "../../images/popup/images";
 
@@ -24,6 +25,7 @@ const SettingsMenu = (props) => {
   const [RAM, setRAM] = useState(0);
   const [width, setWidth] = useState(0);
   const [height, setHeight] = useState(0);
+  const [apiKeyDialogOpen, setApiKeyDialogOpen] = useState(false);
 
   useEffect(() => {
     // Check chrome version
@@ -805,6 +807,15 @@ const SettingsMenu = (props) => {
             className="DropdownMenuItem"
             onSelect={(e) => {
               e.preventDefault();
+              setApiKeyDialogOpen(true);
+            }}
+          >
+            OpenAI API Key Settings
+          </DropdownMenu.Item>
+          <DropdownMenu.Item
+            className="DropdownMenuItem"
+            onSelect={(e) => {
+              e.preventDefault();
               handleTroubleshooting();
             }}
           >
@@ -812,6 +823,11 @@ const SettingsMenu = (props) => {
           </DropdownMenu.Item>
         </DropdownMenu.Content>
       </DropdownMenu.Portal>
+      <ApiKeyDialog 
+        open={apiKeyDialogOpen} 
+        onOpenChange={setApiKeyDialogOpen} 
+        shadowRef={props.shadowRef}
+      />
     </DropdownMenu.Root>
   );
 };
